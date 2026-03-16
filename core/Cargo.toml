@@ -1,11 +1,11 @@
 [package]
-name = "barq-core"
+name = "core"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Core tensor operations and memory management for Barq inference engine"
+description = "Core tensor operations and memory management"
 
 [dependencies]
 # Workspace dependencies
