@@ -23,6 +23,7 @@ pub mod rope;
 pub mod simd;
 pub mod simd_softmax;
 pub mod gemm;
+pub mod platform;
 pub mod prelude;
 
 pub use error::{Error, Result};
@@ -30,3 +31,4 @@ pub use tensor::{Tensor, TensorType, TensorData};
 pub use context::Context;
 pub use memory::{MemoryType, MemoryBuffer, Allocator};
 pub use quant::{QuantizationType, Quantize, Dequantize};
+pub use platform::{PlatformType, SIMDCapabilities, DeviceInfo, detect_platform, detect_simd, get_device_info, print_platform_info};
