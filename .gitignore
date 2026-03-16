@@ -1,0 +1,42 @@
+# Rust
+/target
+**/*.rs.bk
+*.pdb
+Cargo.lock
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Models
+*.gguf
+*.gguf.*
+*.bin
+models/
+*.safetensors
+
+# Logs
+*.log
+
+# Testing
+.bench/
+test-results/
+
+# Profiling
+flamegraph.svg
+perf.data
+perf.data.old
+
+# Build artifacts
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+
+# Documentation
+docs/book/book/
