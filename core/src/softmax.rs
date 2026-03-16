@@ -32,7 +32,9 @@ pub fn softmax_inplace(logits: &mut [f32]) -> Result<()> {
     #[cfg(feature = "simd")]
     {
         use crate::simd_softmax::simd_softmax;
-        return simd_softmax(logits, logits);
+        // Create temporary buffer for input while computing output
+        let input = logits.to_vec();
+        return simd_softmax(&input, logits);
     }
 
     // Fallback to scalar implementation

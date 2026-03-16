@@ -413,7 +413,7 @@ impl Tensor {
             return Ok(self.clone());
         }
 
-        let data = match &self.data {
+        let data = match &*self.data {
             TensorData::F16(v) => TensorData::F32(v.iter().map(|x| x.to_f32()).collect()),
             TensorData::Bf16(v) => TensorData::F32(v.iter().map(|x| x.to_f32()).collect()),
             TensorData::F64(v) => TensorData::F32(v.iter().map(|&x| x as f32).collect()),
@@ -421,12 +421,12 @@ impl Tensor {
             _ => return Err(Error::type_mismatch("f32", self.dtype.name())),
         };
 
-        Tensor::new(self.name.clone(), TensorType::F32, self.shape.clone(), data)
+        Tensor::new(self.name.clone(), TensorType::F32, self.shape.clone(), Arc::new(data))
     }
 
     /// Get data as f32 slice (returns error if not f32)
     pub fn as_f32_slice(&self) -> Result<&[f32]> {
-        match &self.data {
+        match &*self.data {
             TensorData::F32(v) => Ok(v),
             _ => Err(Error::type_mismatch("f32", self.dtype.name())),
         }

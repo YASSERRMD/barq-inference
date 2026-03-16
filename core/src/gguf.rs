@@ -295,14 +295,19 @@ impl GgufReader {
         let info = self.get_tensor_info(name)
             .ok_or_else(|| Error::Tensor(format!("Tensor not found: {}", name)))?;
 
+        // Clone the fields we need after seeking
+        let offset = info.offset;
+        let dimensions = info.dimensions.clone();
+        let dtype = info.dtype;
+
         // Seek to tensor data offset
         use std::io::Seek;
-        self.reader.seek(io::SeekFrom::Start(info.offset))
+        self.reader.seek(io::SeekFrom::Start(offset))
             .map_err(|e| Error::Io(e))?;
 
         // Calculate total size
-        let total_elements: usize = info.dimensions.iter().map(|&d| d as usize).product();
-        let type_size = info.dtype.size();
+        let total_elements: usize = dimensions.iter().map(|&d| d as usize).product();
+        let type_size = dtype.size();
         let total_bytes = total_elements * type_size;
 
         // Read tensor data
@@ -310,7 +315,7 @@ impl GgufReader {
         self.reader.read_exact(&mut data).map_err(|e| Error::Io(e))?;
 
         // Convert to TensorData based on type
-        let tensor_data = match info.dtype {
+        let tensor_data = match dtype {
             TensorType::F32 => {
                 let values: Vec<f32> = data.chunks_exact(4)
                     .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
