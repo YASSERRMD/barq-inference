@@ -1,5 +1,7 @@
 //! Barq - High-performance LLM inference engine CLI
 
+mod performance;
+
 use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 use tracing::{info, error, Level};
@@ -19,6 +21,20 @@ struct Cli {
     /// Number of threads
     #[arg(short, long, global = true, default_value = "4")]
     threads: usize,
+
+    // === Performance Optimizations ===
+
+    /// Enable CUDA Graphs (7-20% TPS gain on NVIDIA GPUs)
+    #[arg(long, global = true)]
+    cuda_graphs: bool,
+
+    /// Enable Flash Attention (~30% faster, reduces VRAM usage)
+    #[arg(long, global = true)]
+    flash_attn: bool,
+
+    /// Performance preset: max-speed, balanced, max-quality, cpu, gpu
+    #[arg(long, global = true)]
+    preset: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -134,6 +150,50 @@ enum Commands {
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
+    // Apply performance optimizations first (before any model loading)
+    if let Some(preset_str) = &cli.preset {
+        use performance::PerformancePreset;
+
+        let preset = match preset_str.as_str() {
+            "max-speed" => {
+                info!("Applying performance preset: max-speed");
+                PerformancePreset::MaxSpeed
+            }
+            "balanced" => {
+                info!("Applying performance preset: balanced");
+                PerformancePreset::Balanced
+            }
+            "max-quality" => {
+                info!("Applying performance preset: max-quality");
+                PerformancePreset::MaxQuality
+            }
+            "cpu" => {
+                info!("Applying performance preset: cpu");
+                PerformancePreset::CPU
+            }
+            "gpu" => {
+                info!("Applying performance preset: gpu");
+                PerformancePreset::GPU
+            }
+            _ => {
+                eprintln!("Unknown preset: {}. Available: max-speed, balanced, max-quality, cpu, gpu", preset_str);
+                std::process::exit(1);
+            }
+        };
+        preset.apply();
+    } else {
+        // Apply individual flags if no preset specified
+        if cli.cuda_graphs {
+            info!("Enabling CUDA Graphs optimization");
+            performance::enable_cuda_graphs(true);
+        }
+
+        if cli.flash_attn {
+            info!("Enabling Flash Attention");
+            performance::enable_flash_attention(true);
+        }
+    }
+
     // Initialize logging
     let log_level = if cli.verbose { Level::DEBUG } else { Level::INFO };
     tracing_subscriber::fmt()
@@ -141,6 +201,14 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     info!("Barq v{} - High-performance LLM inference engine", env!("CARGO_PKG_VERSION"));
+
+    // Log performance settings
+    if performance::cuda_graphs_enabled() {
+        info!("CUDA Graphs: enabled");
+    }
+    if performance::flash_attention_enabled() {
+        info!("Flash Attention: enabled");
+    }
 
     // Execute command
     match cli.command {
