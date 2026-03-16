@@ -5,7 +5,6 @@
 // MIT License
 
 #![deny(missing_docs)]
-#![deny(unsafe_code)]
 #![warn(clippy::all)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
@@ -21,6 +20,8 @@ pub mod softmax;
 pub mod normalization;
 pub mod attention;
 pub mod rope;
+pub mod simd;
+pub mod simd_softmax;
 pub mod prelude;
 
 pub use error::{Error, Result};
