@@ -1,6 +1,7 @@
 //! Memory management for tensor operations
 
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 use crate::error::{Error, Result};
 
@@ -32,7 +33,7 @@ pub trait MemoryBuffer: Send + Sync {
     fn memory_type(&self) -> MemoryType;
 
     /// Copies data from another buffer
-    fn copy_from(&mut self, src: &MemoryBuffer) -> Result<()>;
+    fn copy_from(&mut self, src: &dyn MemoryBuffer) -> Result<()>;
 
     /// Fills the buffer with zeros
     fn fill_zero(&mut self);
@@ -90,7 +91,7 @@ impl MemoryBuffer for HostBuffer {
         self.memory_type
     }
 
-    fn copy_from(&mut self, src: &MemoryBuffer) -> Result<()> {
+    fn copy_from(&mut self, src: &dyn MemoryBuffer) -> Result<()> {
         if src.size() > self.size() {
             return Err(Error::Allocation(
                 format!("Source buffer ({} bytes) larger than destination ({} bytes)",

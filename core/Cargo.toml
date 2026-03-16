@@ -35,6 +35,11 @@ ahash = "0.8"
 rand = "0.8"
 rand_chacha = "0.3"
 byteorder = "1.5"
+num_cpus = "1.16"
+
+# GPU dependencies (optional)
+cudarc = { version = "0.12", optional = true }
+metal = { version = "0.28", optional = true }
 
 [dev-dependencies]
 criterion = "0.5"
@@ -43,5 +48,5 @@ proptest = "1.5"
 [features]
 default = ["simd"]
 simd = []
-cuda = ["cudarc"]
-metal = ["metal"]
+cuda = ["dep:cudarc"]
+metal = ["dep:metal"]

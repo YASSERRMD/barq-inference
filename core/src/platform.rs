@@ -87,16 +87,12 @@ pub fn detect_simd() -> SIMDCapabilities {
 
     #[cfg(target_arch = "aarch64")]
     {
-        use std::arch::aarch64::*;
-
-        unsafe {
-            SIMDCapabilities {
-                platform,
-                avx2: false,
-                avx512: false,
-                neon: is_aarch64_feature_detected!("neon"),
-                sve: is_aarch64_feature_detected!("sve"), // ARMv9
-            }
+        SIMDCapabilities {
+            platform,
+            avx2: false,
+            avx512: false,
+            neon: true,  // All aarch64 has NEON
+            sve: false, // TODO: Detect SVE at runtime
         }
     }
 
@@ -142,9 +138,9 @@ pub fn get_device_info() -> DeviceInfo {
         PlatformType::Cuda => {
             DeviceInfo {
                 platform,
-                device_name: get_cuda_device_name(),
-                compute_units: get_cuda_compute_units(),
-                memory_mb: get_cuda_memory_mb(),
+                device_name: "CUDA Device".to_string(),
+                compute_units: 0,
+                memory_mb: 0,
             }
         }
 
