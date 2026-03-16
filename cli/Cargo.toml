@@ -1,0 +1,43 @@
+[package]
+name = "barq-inference"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Command-line interface for Barq inference engine"
+
+[[bin]]
+name = "barq-inference"
+path = "src/main.rs"
+
+[dependencies]
+# Workspace dependencies
+tokio = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+itertools = { workspace = true }
+
+# CLI dependencies
+clap = { version = "4.5", features = ["derive"] }
+clap_complete = "4.5"
+indicatif = "0.17"
+console = "0.15"
+
+# Internal crates
+core = { path = "../core" }
+vocab = { path = "../vocab" }
+models = { path = "../models" }
+backend = { path = "../backend" }
+sampling = { path = "../sampling" }
+advanced = { path = "../advanced" }
+
+[features]
+default = []
+cuda = ["cudarc", "backend/cuda"]
+metal = ["metal", "backend/metal"]
