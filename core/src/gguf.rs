@@ -299,6 +299,7 @@ impl GgufReader {
         let offset = info.offset;
         let dimensions = info.dimensions.clone();
         let dtype = info.dtype;
+        let name = info.name.clone();
 
         // Seek to tensor data offset
         use std::io::Seek;
@@ -322,12 +323,12 @@ impl GgufReader {
                     .collect();
                 crate::tensor::TensorData::F32(values)
             }
-            _ => return Err(Error::Unsupported(format!("Loading {} tensors", info.dtype))),
+            _ => return Err(Error::Unsupported(format!("Loading {} tensors", dtype))),
         };
 
-        let shape = Shape::new(info.dimensions.iter().map(|&d| d as usize).collect());
+        let shape = Shape::new(dimensions.iter().map(|&d| d as usize).collect());
 
-        Tensor::new(Some(info.name.clone()), info.dtype, shape, tensor_data)
+        Tensor::new(Some(name), dtype, shape, tensor_data)
     }
 }
 

@@ -421,7 +421,7 @@ impl Tensor {
             _ => return Err(Error::type_mismatch("f32", self.dtype.name())),
         };
 
-        Tensor::new(self.name.clone(), TensorType::F32, self.shape.clone(), Arc::new(data))
+        Tensor::new(self.name.clone(), TensorType::F32, self.shape.clone(), data)
     }
 
     /// Get data as f32 slice (returns error if not f32)
