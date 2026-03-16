@@ -28,6 +28,14 @@ pub fn softmax(logits: &[f32]) -> Result<Vec<f32>> {
 }
 
 pub fn softmax_inplace(logits: &mut [f32]) -> Result<()> {
+    // Use SIMD-accelerated softmax when available
+    #[cfg(feature = "simd")]
+    {
+        use crate::simd_softmax::simd_softmax;
+        return simd_softmax(logits, logits);
+    }
+
+    // Fallback to scalar implementation
     let output = softmax(logits)?;
     logits.copy_from_slice(&output);
     Ok(())
