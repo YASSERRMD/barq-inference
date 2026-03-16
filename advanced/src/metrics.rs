@@ -225,6 +225,108 @@ pub fn check_context_health(ctx_tokens: usize, ctx_capacity: usize, threshold: f
     true
 }
 
+/// Context health status
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContextHealth {
+    Healthy,
+    Degraded,
+    Critical,
+}
+
+impl ContextHealth {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ContextHealth::Healthy => "healthy",
+            ContextHealth::Degraded => "degraded",
+            ContextHealth::Critical => "critical",
+        }
+    }
+
+    pub fn should_reset(&self) -> bool {
+        matches!(self, ContextHealth::Critical)
+    }
+}
+
+/// Context manager with health tracking and graceful reset
+pub struct ContextManager {
+    current_tokens: usize,
+    capacity: usize,
+    degraded_threshold: f32,
+    critical_threshold: f32,
+    reset_count: std::sync::atomic::AtomicU64,
+}
+
+impl ContextManager {
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            current_tokens: 0,
+            capacity,
+            degraded_threshold: 0.7,
+            critical_threshold: 0.9,
+            reset_count: std::sync::atomic::AtomicU64::new(0),
+        }
+    }
+
+    pub fn with_thresholds(capacity: usize, degraded_threshold: f32, critical_threshold: f32) -> Self {
+        Self {
+            current_tokens: 0,
+            capacity,
+            degraded_threshold,
+            critical_threshold,
+            reset_count: std::sync::atomic::AtomicU64::new(0),
+        }
+    }
+
+    pub fn update_tokens(&mut self, tokens: usize) {
+        self.current_tokens = tokens;
+    }
+
+    pub fn check_health(&self) -> ContextHealth {
+        if self.capacity == 0 {
+            return ContextHealth::Healthy;
+        }
+
+        let usage = self.current_tokens as f32 / self.capacity as f32;
+
+        if usage >= self.critical_threshold {
+            ContextHealth::Critical
+        } else if usage >= self.degraded_threshold {
+            ContextHealth::Degraded
+        } else {
+            ContextHealth::Healthy
+        }
+    }
+
+    pub fn usage_ratio(&self) -> f32 {
+        if self.capacity == 0 {
+            0.0
+        } else {
+            self.current_tokens as f32 / self.capacity as f32
+        }
+    }
+
+    pub fn should_reset(&self) -> bool {
+        self.check_health().should_reset()
+    }
+
+    pub fn reset(&mut self) {
+        self.current_tokens = 0;
+        self.reset_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub fn reset_count(&self) -> u64 {
+        self.reset_count.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub fn current_tokens(&self) -> usize {
+        self.current_tokens
+    }
+
+    pub fn capacity(&self) -> usize {
+        self.capacity
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -270,5 +372,44 @@ mod tests {
     fn test_context_health() {
         assert!(check_context_health(1000, 8192, 0.9)); // 12% usage
         assert!(!check_context_health(8000, 8192, 0.9)); // 97% usage
+    }
+
+    #[test]
+    fn test_context_manager() {
+        let mut manager = ContextManager::new(8192);
+
+        manager.update_tokens(1000);
+        assert_eq!(manager.check_health(), ContextHealth::Healthy);
+        assert!(!manager.should_reset());
+
+        manager.update_tokens(7000);
+        assert_eq!(manager.check_health(), ContextHealth::Degraded);
+
+        manager.update_tokens(8000);
+        assert_eq!(manager.check_health(), ContextHealth::Critical);
+        assert!(manager.should_reset());
+
+        manager.reset();
+        assert_eq!(manager.current_tokens(), 0);
+        assert_eq!(manager.reset_count(), 1);
+    }
+
+    #[test]
+    fn test_context_manager_thresholds() {
+        let mut manager = ContextManager::with_thresholds(10000, 0.5, 0.8);
+
+        manager.update_tokens(4000);
+        assert_eq!(manager.check_health(), ContextHealth::Degraded);
+
+        manager.update_tokens(9000);
+        assert_eq!(manager.check_health(), ContextHealth::Critical);
+    }
+
+    #[test]
+    fn test_usage_ratio() {
+        let mut manager = ContextManager::new(10000);
+
+        manager.update_tokens(5000);
+        assert!((manager.usage_ratio() - 0.5).abs() < 0.01);
     }
 }
