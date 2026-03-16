@@ -68,7 +68,9 @@ fn simd_reduce_max(arr: &[f32]) -> f32 {
 
     #[cfg(target_arch = "aarch64")]
     {
-        return reduce_max_neon(arr);
+        unsafe {
+            return reduce_max_neon(arr);
+        }
     }
 
     // Scalar fallback
