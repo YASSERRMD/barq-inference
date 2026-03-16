@@ -1,6 +1,7 @@
 //! Core sampler trait and types
 
-use rand::{Rng, SeedableRng};
+use rand::Rng;
+use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 
 use core::error::{Error, Result};

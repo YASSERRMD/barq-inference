@@ -22,6 +22,9 @@ rayon = { workspace = true }
 cudarc = { version = "0.12", optional = true }
 metal = { version = "0.28", optional = true }
 
+# System dependencies
+libc = "0.2"
+
 core = { path = "../core" }
 
 [features]

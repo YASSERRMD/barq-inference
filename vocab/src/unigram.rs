@@ -3,7 +3,8 @@
 use crate::tokenizer::Tokenizer;
 use crate::vocab::{TokenizationResult, Vocab};
 use async_trait::async_trait;
-use core::error::Error;
+use anyhow::Result;
+
 
 /// Unigram tokenizer (T5)
 pub struct Unigram {
@@ -20,12 +21,12 @@ impl Unigram {
 
 #[async_trait]
 impl Tokenizer for Unigram {
-    async fn tokenize(&self, _text: &str, _add_special: bool) -> Result<TokenizationResult, Error> {
-        Err(Error::Unsupported("Unigram not yet implemented".to_string()))
+    async fn tokenize(&self, _text: &str, _add_special: bool) -> Result<TokenizationResult> {
+        Err(anyhow::anyhow!("Unigram not yet implemented".to_string()))
     }
 
-    async fn decode(&self, _ids: &[u32]) -> Result<String, Error> {
-        Err(Error::Unsupported("Unigram not yet implemented".to_string()))
+    async fn decode(&self, _ids: &[u32]) -> Result<String> {
+        Err(anyhow::anyhow!("Unigram not yet implemented".to_string()))
     }
 
     fn vocab(&self) -> &Vocab {

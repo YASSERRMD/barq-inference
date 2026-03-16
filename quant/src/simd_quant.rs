@@ -177,7 +177,7 @@ unsafe fn dequantize_q4_0_neon(
 
             // Load and multiply by scale
             let vals = vld1q_f32(deq_vals.as_ptr());
-            let result = vfmulq_f32(vals, scale_vec);
+            let result = vmulq_f32(vals, scale_vec);
             vst1q_f32(output.as_mut_ptr().add(i), result);
 
             i += 4;
