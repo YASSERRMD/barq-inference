@@ -19,8 +19,6 @@
 - **RoPE Scaling**: YaRN, LongRoPE for extended context
 - **Dynamic Quantization**: Runtime quantization with minimal quality loss
 - **Tensor Parallelism**: Distributed inference across multiple GPUs
-- **Pipeline Parallelism**: Run models larger than GPU memory
-- **Hybrid Attention**: Combining local and global attention patterns
 
 ### Performance Optimizations
 - **SIMD Intrinsics**: Hand-optimized AVX2, AVX-512, NEON kernels
@@ -42,7 +40,21 @@ cargo build --release --features cuda
 cargo build --release --features metal
 
 # Install CLI
-cargo install --path barq-cli
+cargo install --path cli
+```
+
+## 🏗️ Architecture
+
+```
+barq-inference/
+├── core/          # Tensor operations and memory management
+├── vocab/         # Vocabulary and tokenization
+├── quant/         # Quantization algorithms
+├── models/        # Model architecture implementations
+├── backend/       # Backend abstraction (CPU/GPU)
+├── sampling/      # Sampling algorithms
+├── advanced/      # Advanced research features
+└── cli/           # Command-line interface
 ```
 
 ## 🔧 Usage
@@ -59,45 +71,34 @@ barq chat -m model.gguf
 # Benchmark
 barq benchmark -m model.gguf
 
-# Quantize model
-barq quantize -i model-f16.gguf -o model-q4_k.gguf -t q4_k
+# Model info
+barq info -m model.gguf
 ```
 
 ### Rust API
 
 ```rust
-use barq_core::prelude::*;
-use barq_models::Llama;
+use models::loader::Model;
+use models::context::{ModelContext, ContextParams};
+use std::sync::Arc;
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() -> anyhow::Result<()> {
     // Load model
-    let model = Llama::load("model.gguf").await?;
+    let model = Model::load("model.gguf").await?;
+    let model = Arc::new(model);
 
     // Create context
-    let mut ctx = model.context()?;
+    let ctx = ModelContext::new(model, ContextParams::default())?;
 
-    // Generate text
-    let tokens = ctx.encode("Hello, world")?;
-    let output = ctx.generate(&tokens, 100)?;
+    // Generate tokens
+    let tokens = vec![1, 2, 3, 4, 5];
+    let output = ctx.generate(&tokens, 100).await?;
 
-    println!("{}", ctx.decode(&output)?);
+    println!("Generated {} tokens", output.len());
 
     Ok(())
 }
-```
-
-## 🏗️ Architecture
-
-```
-barq-inference/
-├── barq-core/      # Core tensor operations and memory management
-├── barq-quant/     # Quantization algorithms
-├── barq-vocab/     # Vocabulary and tokenization
-├── barq-models/    # Model architecture implementations
-├── barq-backend/   # Backend abstraction (CPU/GPU)
-├── barq-cli/       # Command-line interface
-└── barq-advanced/  # Advanced research features
 ```
 
 ## 📊 Performance
@@ -114,44 +115,66 @@ Compared to llama.cpp (single-threaded CPU):
 
 ## 🔬 Advanced Features
 
-### Speculative Deciving
+### Speculative Decoding
 ```rust
-use barq_advanced::SpeculativeConfig;
+use advanced::speculative::{SpeculativeDecoding, SpeculativeConfig};
 
 let config = SpeculativeConfig {
-    draft_model: Some("tiny-llama.gguf"),
     speculation_steps: 5,
     accept_threshold: 0.8,
+    ..Default::default()
 };
 
-let engine = SpeculativeEngine::new(config)?;
-let tokens = engine.generate(&ctx, &prompt, 100)?;
+let engine = SpeculativeDecoding::new(main_model, draft_model, config);
+let tokens = engine.generate(&prompt_tokens, 100).await?;
 ```
 
 ### Flash Attention
 ```rust
-use barq_backend::AttentionConfig;
+use advanced::flash_attention::{FlashAttention, FlashAttentionConfig};
 
-let config = AttentionConfig {
-    flash_attention: true,
-    use_kv_cache: true,
-    attention_window: 2048,
+let config = FlashAttentionConfig {
+    window_size: 2048,
+    causal: true,
+    block_size: 256,
 };
 
-let ctx = model.context_with_attention(config)?;
+let flash_attn = FlashAttention::new(config);
+let output = flash_attn.forward(&q, &k, &v)?;
 ```
 
 ### PagedAttention
 ```rust
-use barq_advanced::paged_attention::PagedCache;
+use advanced::paged_attention::PagedAttention;
 
-let cache = PagedCache::new(1024, 128)?;
-let mut ctx = model.context_with_cache(cache)?;
+let cache = PagedAttention::new(1024, 128);
+let pages = cache.allocate(seq_id, 10).await?;
 ```
 
-## 🤝 Contributing
+## 🧪 Testing
 
-Contributions are welcome! Please read our contributing guidelines.
+```bash
+# Run all tests
+cargo test
+
+# Run with output
+cargo test -- --nocapture
+
+# Run benchmarks
+cargo bench
+```
+
+## 📝 Contributing
+
+Contributions are welcome! The project is organized into phases:
+
+1. ✅ Phase 1: Core tensor library
+2. ✅ Phase 2-3: GGUF format and tokenization
+3. ✅ Phase 4-5: Model architectures and inference
+4. ✅ Phase 6-7: KV cache and attention mechanisms
+5. ✅ Phase 8: Sampling algorithms
+6. ✅ Phase 9: Backend abstraction layer
+7. 🔄 Phase 10-14: Advanced features and optimizations
 
 ## 📄 License
 
