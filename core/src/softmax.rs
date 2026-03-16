@@ -1,7 +1,7 @@
 //! Softmax implementation
 
-use core::tensor::{Tensor, TensorType, Shape, TensorData};
-use core::error::{Error, Result};
+use crate::tensor::{Tensor, TensorType, Shape, TensorData};
+use crate::error::{Error, Result};
 
 pub fn softmax(logits: &[f32]) -> Result<Vec<f32>> {
     if logits.is_empty() {

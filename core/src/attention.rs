@@ -1,9 +1,9 @@
 //! Multi-head attention implementation
 
-use core::tensor::{Tensor, TensorType, Shape, TensorData};
-use core::error::{Error, Result};
-use core::softmax;
-use core::normalization;
+use crate::tensor::{Tensor, TensorType, Shape, TensorData};
+use crate::error::{Error, Result};
+use crate::softmax;
+use crate::normalization;
 
 /// Attention configuration
 #[derive(Debug, Clone)]
@@ -121,7 +121,7 @@ impl MultiHeadAttention {
             }
 
             // Apply softmax
-            let attn_probs = softmax(&attn_weights)?;
+            let attn_probs = softmax::softmax(&attn_weights)?;
 
             // Compute weighted sum of values
             for d in 0..head_dim {

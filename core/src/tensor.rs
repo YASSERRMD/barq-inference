@@ -54,7 +54,7 @@ impl TensorType {
     #[inline]
     pub const fn size(&self) -> usize {
         match self {
-            TensorType::F32 | TensorType::I32 => 4,
+            TensorType::F32 | TensorType::I32 | TensorType::U32 => 4,
             TensorType::F16 | TensorType::Bf16 | TensorType::I16 | TensorType::U16 => 2,
             TensorType::F64 | TensorType::I64 | TensorType::U64 => 8,
             TensorType::I8 | TensorType::U8 | TensorType::Bool => 1,

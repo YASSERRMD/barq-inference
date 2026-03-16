@@ -1,6 +1,6 @@
 //! Rotary Position Embedding (RoPE) implementation
 
-use core::error::{Error, Result};
+use crate::error::{Error, Result};
 
 /// Compute rotary position embeddings
 pub fn rope(

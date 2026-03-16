@@ -1,6 +1,7 @@
 //! Memory management for tensor operations
 
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 use crate::error::{Error, Result};
 
