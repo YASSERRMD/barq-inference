@@ -1,7 +1,7 @@
 //! Layer normalization implementation
 
-use core::tensor::{Tensor, TensorType, Shape, TensorData};
-use core::error::{Error, Result};
+use crate::tensor::{Tensor, TensorType, Shape, TensorData};
+use crate::error::{Error, Result};
 
 pub fn layer_norm(input: &[f32], weight: &[f32], bias: &[f32], eps: f32) -> Result<Vec<f32>> {
     if input.is_empty() {

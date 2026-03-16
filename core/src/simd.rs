@@ -191,7 +191,7 @@ unsafe fn dot_product_neon(a: &[f32], b: &[f32]) -> f32 {
     while i + 4 <= a.len() {
         let a_vec = vld1q_f32(a.as_ptr().add(i));
         let b_vec = vld1q_f32(b.as_ptr().add(i));
-        let mul = vfmulq_f32(a_vec, b_vec);
+        let mul = vmulq_f32(a_vec, b_vec);
         sum = vaddq_f32(sum, mul);
         i += 4;
     }

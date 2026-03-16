@@ -142,9 +142,9 @@ pub fn get_device_info() -> DeviceInfo {
         PlatformType::Cuda => {
             DeviceInfo {
                 platform,
-                device_name: get_cuda_device_name(),
-                compute_units: get_cuda_compute_units(),
-                memory_mb: get_cuda_memory_mb(),
+                device_name: "CUDA Device".to_string(),
+                compute_units: 0,
+                memory_mb: 0,
             }
         }
 
