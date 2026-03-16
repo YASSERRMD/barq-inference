@@ -22,6 +22,6 @@ pub use moe::MoEInference;
 pub use tensor_parallel::TensorParallel;
 pub use uds_server::{InferenceServer, InferenceClient, InferenceRequest, InferenceResponse, ServerConfig};
 pub use continuous_batching::{BatchScheduler, Batch, ContinuousBatchingConfig};
-pub use metrics::{InferenceMetrics, MetricsHandle, RequestGuard, HealthCheck, MetricsResponse, check_context_health};
+pub use metrics::{InferenceMetrics, MetricsHandle, RequestGuard, HealthCheck, MetricsResponse, check_context_health, ContextManager, ContextHealth};
 pub use logging::{Logger, RequestLogger, LogLevel, LoggingConfig, init_logger, logger};
 pub use metrics_server::{MetricsServer, MetricsServerConfig, PrometheusExporter};
