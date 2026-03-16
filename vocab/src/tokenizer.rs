@@ -3,16 +3,16 @@
 use async_trait::async_trait;
 
 use crate::vocab::{TokenizationResult, Vocab, VocabType};
-use core::error::Error;
+use anyhow::Result;
 
 /// Tokenizer trait
 #[async_trait]
 pub trait Tokenizer: Send + Sync {
     /// Tokenize text into token IDs
-    async fn tokenize(&self, text: &str, add_special: bool) -> Result<TokenizationResult, Error>;
+    async fn tokenize(&self, text: &str, add_special: bool) -> Result<TokenizationResult>;
 
     /// Decode token IDs back to text
-    async fn decode(&self, ids: &[u32]) -> Result<String, Error>;
+    async fn decode(&self, ids: &[u32]) -> Result<String>;
 
     /// Returns the vocabulary
     fn vocab(&self) -> &Vocab;

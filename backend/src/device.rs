@@ -99,7 +99,7 @@ impl Device for CpuDevice {
 
     fn total_memory(&self) -> usize {
         // Get total system memory
-        #[cfg(unix)]
+        #[cfg(target_os = "linux")]
         {
             unsafe {
                 let mut info: libc::sysinfo = std::mem::zeroed();
@@ -108,12 +108,12 @@ impl Device for CpuDevice {
                 }
             }
         }
-        // Fallback
+        // Fallback for macOS and other platforms
         16 * 1024 * 1024 * 1024 // 16 GB
     }
 
     fn available_memory(&self) -> usize {
-        #[cfg(unix)]
+        #[cfg(target_os = "linux")]
         {
             unsafe {
                 let mut info: libc::sysinfo = std::mem::zeroed();
@@ -122,7 +122,7 @@ impl Device for CpuDevice {
                 }
             }
         }
-        // Fallback
+        // Fallback for macOS and other platforms
         8 * 1024 * 1024 * 1024 // 8 GB
     }
 

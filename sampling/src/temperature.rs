@@ -1,6 +1,7 @@
 //! Temperature sampling implementation
 
 use rand::Rng;
+use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 
 use crate::sampler::{Sampler, SamplerType, TokenData};

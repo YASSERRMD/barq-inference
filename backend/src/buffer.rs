@@ -38,6 +38,9 @@ pub trait Buffer: Send + Sync {
 
     /// Clone the buffer
     fn clone_box(&self) -> Box<dyn Buffer>;
+
+    /// Cast to Any for downcasting
+    fn as_any(&self) -> &dyn std::any::Any;
 }
 
 impl Clone for Box<dyn Buffer> {
@@ -124,10 +127,8 @@ impl Buffer for CpuBuffer {
             data: self.data.clone(),
         })
     }
-}
 
-impl CpuBuffer {
-    pub fn as_any(&self) -> &dyn std::any::Any {
+    fn as_any(&self) -> &dyn std::any::Any {
         self
     }
 }
@@ -179,6 +180,10 @@ impl Buffer for GpuBuffer {
             size: self.size,
             device_id: self.device_id,
         })
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
 }
 
