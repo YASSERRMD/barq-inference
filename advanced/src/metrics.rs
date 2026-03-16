@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 
 /// Global inference metrics
-#[derive(Debug, Serialize)]
+#[derive(Debug)]
 pub struct InferenceMetrics {
     /// Total requests processed
     pub total_requests: AtomicU64,
@@ -30,6 +30,9 @@ pub struct InferenceMetrics {
     pub peak_concurrent_requests: AtomicUsize,
 }
 
+/// Thread-safe handle to metrics
+pub type MetricsHandle = Arc<InferenceMetrics>;
+
 impl InferenceMetrics {
     pub fn new() -> Self {
         Self {
@@ -44,12 +47,12 @@ impl InferenceMetrics {
         }
     }
 
-    pub fn record_request_start(&self) -> RequestGuard {
-        let old_count = self.active_requests.fetch_add(1, Ordering::Relaxed);
-        let mut peak = self.peak_concurrent_requests.load(Ordering::Relaxed);
+    pub fn record_request_start(handle: &MetricsHandle) -> RequestGuard {
+        let old_count = handle.active_requests.fetch_add(1, Ordering::Relaxed);
+        let mut peak = handle.peak_concurrent_requests.load(Ordering::Relaxed);
 
         while old_count + 1 > peak {
-            match self.peak_concurrent_requests.compare_exchange_weak(
+            match handle.peak_concurrent_requests.compare_exchange_weak(
                 peak,
                 old_count + 1,
                 Ordering::Relaxed,
@@ -60,10 +63,10 @@ impl InferenceMetrics {
             }
         }
 
-        self.total_requests.fetch_add(1, Ordering::Relaxed);
+        handle.total_requests.fetch_add(1, Ordering::Relaxed);
 
         RequestGuard {
-            metrics: Arc::downgrade(&self.inner),
+            metrics: Some(Arc::downgrade(handle)),
             start: Instant::now(),
         }
     }
@@ -112,21 +115,16 @@ impl Default for InferenceMetrics {
     }
 }
 
-// Inner wrapper for Arc downgrading in RequestGuard
-struct InferenceMetricsInner {
-    metrics: InferenceMetrics,
-}
-
 /// RAII guard for request tracking
 pub struct RequestGuard {
-    metrics: Option<std::sync::Weak<InferenceMetricsInner>>,
+    metrics: Option<std::sync::Weak<InferenceMetrics>>,
     start: Instant,
 }
 
 impl RequestGuard {
     pub fn complete(self, prompt_tokens: usize, generated_tokens: usize) {
-        if let Some(inner) = self.metrics {
-            if let Some(metrics) = inner.upgrade() {
+        if let Some(weak) = self.metrics {
+            if let Some(metrics) = weak.upgrade() {
                 let duration = self.start.elapsed();
                 metrics.record_success(prompt_tokens, generated_tokens, duration.as_millis() as u64);
             }
@@ -136,8 +134,8 @@ impl RequestGuard {
 
 impl Drop for RequestGuard {
     fn drop(&mut self) {
-        if let Some(inner) = &self.metrics {
-            if let Some(metrics) = inner.upgrade() {
+        if let Some(weak) = &self.metrics {
+            if let Some(metrics) = weak.upgrade() {
                 metrics.active_requests.fetch_sub(1, Ordering::Relaxed);
             }
         }
