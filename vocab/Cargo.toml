@@ -26,7 +26,7 @@ rust_tokenizers = "8.1"
 hashbrown = "0.15"
 aho-corasick = "1.1"
 
-core = { path = "../core" }
+barq_core = { path = "../barq_core" }
 
 [features]
 default = []

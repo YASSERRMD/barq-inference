@@ -2,7 +2,7 @@
 //!
 //! This module provides accelerated dequantization using SIMD intrinsics
 
-use core::error::Result;
+use barq_core::error::Result;
 
 /// Dequantize Q4_0 block using SIMD
 ///

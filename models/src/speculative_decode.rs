@@ -8,8 +8,8 @@
 //! 5. Repeat until max tokens or EOS
 
 use std::time::{Duration, Instant};
-use core::error::{Error, Result};
-use core::tensor::Tensor;
+use barq_core::error::{Error, Result};
+use barq_core::tensor::Tensor;
 
 use crate::speculative_engine::SpeculativeEngine;
 use crate::speculative_engine::SpeculativeConfig;

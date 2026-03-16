@@ -3,7 +3,7 @@
 use std::sync::{Arc, Mutex};
 
 use crate::sampler::{Sampler, SamplerType, TokenData};
-use core::error::{Error, Result};
+use barq_core::error::{Error, Result};
 
 /// Sampler chain
 ///

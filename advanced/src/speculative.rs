@@ -13,8 +13,8 @@
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 
-use core::error::{Error, Result};
-use core::tensor::{Tensor, TensorType, TensorData, Shape};
+use barq_core::error::{Error, Result};
+use barq_core::tensor::{Tensor, TensorType, TensorData, Shape};
 
 /// Speculative decoding configuration
 #[derive(Debug, Clone)]

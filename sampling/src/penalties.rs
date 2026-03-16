@@ -1,6 +1,6 @@
 //! Penalty implementations for sampling
 
-use crate::error::{Error, Result};
+use barq_core::error::{Error, Result};
 
 /// Repetition penalty sampler
 #[derive(Debug, Clone)]
@@ -15,7 +15,7 @@ impl RepetitionPenalty {
 }
 
 impl crate::sampler::Sampler for RepetitionPenalty {
-    fn sample(&mut self, logits: &mut [crate::sampler::TokenData]) -> core::error::Result<i32> {
+    fn sample(&mut self, logits: &mut [crate::sampler::TokenData]) -> Result<i32> {
         // This modifies logits in place but doesn't sample
         // Typically used in a chain
         for logit in logits.iter_mut() {
@@ -48,7 +48,7 @@ impl FrequencyPenalty {
 }
 
 impl crate::sampler::Sampler for FrequencyPenalty {
-    fn sample(&mut self, logits: &mut [crate::sampler::TokenData]) -> core::error::Result<i32> {
+    fn sample(&mut self, logits: &mut [crate::sampler::TokenData]) -> Result<i32> {
         for logit in logits.iter_mut() {
             logit.logit -= self.penalty;
         }
@@ -79,7 +79,7 @@ impl PresencePenalty {
 }
 
 impl crate::sampler::Sampler for PresencePenalty {
-    fn sample(&mut self, logits: &mut [crate::sampler::TokenData]) -> core::error::Result<i32> {
+    fn sample(&mut self, logits: &mut [crate::sampler::TokenData]) -> Result<i32> {
         for logit in logits.iter_mut() {
             logit.logit -= self.penalty;
         }
@@ -110,7 +110,7 @@ impl MinP {
 }
 
 impl crate::sampler::Sampler for MinP {
-    fn sample(&mut self, logits: &mut [crate::sampler::TokenData]) -> core::error::Result<i32> {
+    fn sample(&mut self, logits: &mut [crate::sampler::TokenData]) -> Result<i32> {
         let min_p = self.min_p;
         if min_p <= 0.0 || min_p >= 1.0 {
             return Ok(logits[0].id);
@@ -182,7 +182,7 @@ impl Mirostat {
 }
 
 impl crate::sampler::Sampler for Mirostat {
-    fn sample(&mut self, logits: &mut [crate::sampler::TokenData]) -> core::error::Result<i32> {
+    fn sample(&mut self, logits: &mut [crate::sampler::TokenData]) -> Result<i32> {
         // Compute softmax
         let mut max_logit = f32::NEG_INFINITY;
         for logit in logits.iter() {
@@ -245,7 +245,7 @@ impl Typical {
 }
 
 impl crate::sampler::Sampler for Typical {
-    fn sample(&mut self, logits: &mut [crate::sampler::TokenData]) -> core::error::Result<i32> {
+    fn sample(&mut self, logits: &mut [crate::sampler::TokenData]) -> Result<i32> {
         let typical_p = self.typical_p;
         if typical_p <= 0.0 || typical_p >= 1.0 {
             return Ok(logits[0].id);
@@ -302,7 +302,7 @@ impl XtcSampler {
 }
 
 impl crate::sampler::Sampler for XtcSampler {
-    fn sample(&mut self, logits: &mut [crate::sampler::TokenData]) -> core::error::Result<i32> {
+    fn sample(&mut self, logits: &mut [crate::sampler::TokenData]) -> Result<i32> {
         // XTC filtering - removes tokens above threshold
         for logit in logits.iter_mut() {
             if logit.p > self.threshold {

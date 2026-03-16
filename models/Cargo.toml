@@ -20,7 +20,7 @@ parking_lot = { workspace = true }
 itertools = { workspace = true }
 num_cpus = "1.16"
 
-core = { path = "../core" }
+barq_core = { path = "../barq_core" }
 vocab = { path = "../vocab" }
 
 [features]

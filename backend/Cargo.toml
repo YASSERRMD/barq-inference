@@ -25,7 +25,7 @@ metal = { version = "0.28", optional = true }
 # System dependencies
 libc = "0.2"
 
-core = { path = "../core" }
+barq_core = { path = "../barq_core" }
 
 [features]
 default = []

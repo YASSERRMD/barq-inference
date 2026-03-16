@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use core::error::{Error, Result};
+use barq_core::error::{Error, Result};
 
 /// Device type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

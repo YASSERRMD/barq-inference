@@ -9,8 +9,8 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use core::error::{Error, Result};
-use core::tensor::Tensor;
+use barq_core::error::{Error, Result};
+use barq_core::tensor::Tensor;
 
 /// Active sequence in batch
 #[derive(Debug, Clone)]

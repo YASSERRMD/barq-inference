@@ -1,7 +1,7 @@
 //! Buffer management for different backends
 
-use core::error::{Error, Result};
-use core::tensor::TensorType;
+use barq_core::error::{Error, Result};
+use barq_core::tensor::TensorType;
 
 /// Buffer type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

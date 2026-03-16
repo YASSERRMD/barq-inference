@@ -1,7 +1,7 @@
 //! Metal backend placeholder
 
-use core::tensor::{Tensor, TensorType, Shape};
-use core::error::{Error, Result};
+use barq_core::tensor::{Tensor, TensorType, Shape};
+use barq_core::error::{Error, Result};
 
 /// Metal backend (placeholder for future implementation)
 pub struct MetalBackend {

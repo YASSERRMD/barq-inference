@@ -2,7 +2,7 @@
 
 use crate::sampler::{Sampler, SamplerType, TokenData};
 use crate::temperature::Temperature;
-use core::error::{Error, Result};
+use barq_core::error::{Error, Result};
 
 /// Softmax sampling
 pub struct SoftmaxSampler;
