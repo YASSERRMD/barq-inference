@@ -1,0 +1,27 @@
+[package]
+name = "models"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Model architecture implementations for Barq inference engine"
+
+[dependencies]
+# Workspace dependencies
+tokio = { workspace = true, features = ["sync", "rt", "macros", "fs", "io-util"] }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+parking_lot = { workspace = true }
+itertools = { workspace = true }
+num_cpus = "1.16"
+
+core = { path = "../core" }
+vocab = { path = "../vocab" }
+
+[features]
+default = []
