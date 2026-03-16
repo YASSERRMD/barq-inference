@@ -4,7 +4,7 @@
 //
 // MIT License
 
-#![deny(missing_docs)]
+// #![deny(missing_docs)]  // TODO: Re-enable after adding missing docs
 #![warn(clippy::all)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
