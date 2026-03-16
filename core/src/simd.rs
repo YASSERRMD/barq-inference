@@ -44,13 +44,7 @@ impl SimdLevel {
 
         #[cfg(all(target_arch = "aarch64", feature = "std"))]
         {
-            use std::arch::aarch64::*;
-
-            unsafe {
-                if is_aarch64_feature_detected!("neon") {
-                    return SimdLevel::NEON;
-                }
-            }
+            return SimdLevel::NEON;
         }
 
         SimdLevel::None
@@ -97,10 +91,8 @@ pub fn simd_dot_product_f32(a: &[f32], b: &[f32]) -> Result<f32> {
 
     #[cfg(target_arch = "aarch64")]
     {
-        use std::arch::aarch64::*;
-
-        unsafe {
-            if simd_level == SimdLevel::NEON && is_aarch64_feature_detected!("neon") {
+        if simd_level == SimdLevel::NEON {
+            unsafe {
                 return Ok(dot_product_neon(a, b));
             }
         }
@@ -191,7 +183,7 @@ unsafe fn dot_product_neon(a: &[f32], b: &[f32]) -> f32 {
     while i + 4 <= a.len() {
         let a_vec = vld1q_f32(a.as_ptr().add(i));
         let b_vec = vld1q_f32(b.as_ptr().add(i));
-        let mul = vfmulq_f32(a_vec, b_vec);
+        let mul = vmulq_f32(a_vec, b_vec);
         sum = vaddq_f32(sum, mul);
         i += 4;
     }
@@ -236,7 +228,7 @@ pub fn simd_add_f32(a: &[f32], b: &[f32], result: &mut [f32]) -> Result<()> {
         use std::arch::aarch64::*;
 
         unsafe {
-            if simd_level == SimdLevel::NEON && is_aarch64_feature_detected!("neon") {
+            if simd_level == SimdLevel::NEON {
                 return add_neon(a, b, result);
             }
         }

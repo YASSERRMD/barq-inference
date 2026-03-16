@@ -22,7 +22,7 @@ itertools = { workspace = true }
 # Additional dependencies
 regex = "1.11"
 unicode-segmentation = "1.12"
-rust-tokenizers = "8.1"
+rust_tokenizers = "8.1"
 hashbrown = "0.15"
 aho-corasick = "1.1"
 

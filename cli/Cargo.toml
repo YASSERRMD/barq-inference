@@ -30,6 +30,10 @@ clap_complete = "4.5"
 indicatif = "0.17"
 console = "0.15"
 
+# GPU dependencies (optional)
+cudarc = { version = "0.12", optional = true }
+metal = { version = "0.28", optional = true }
+
 # Internal crates
 core = { path = "../core" }
 vocab = { path = "../vocab" }
@@ -40,5 +44,5 @@ advanced = { path = "../advanced" }
 
 [features]
 default = []
-cuda = ["cudarc", "backend/cuda"]
-metal = ["metal", "backend/metal"]
+cuda = ["dep:cudarc", "backend/cuda"]
+metal = ["dep:metal", "backend/metal"]

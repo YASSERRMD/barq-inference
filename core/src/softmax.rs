@@ -1,7 +1,7 @@
 //! Softmax implementation
 
-use core::tensor::{Tensor, TensorType, Shape, TensorData};
-use core::error::{Error, Result};
+use crate::tensor::{Tensor, TensorType, Shape, TensorData};
+use crate::error::{Error, Result};
 
 pub fn softmax(logits: &[f32]) -> Result<Vec<f32>> {
     if logits.is_empty() {
@@ -32,7 +32,9 @@ pub fn softmax_inplace(logits: &mut [f32]) -> Result<()> {
     #[cfg(feature = "simd")]
     {
         use crate::simd_softmax::simd_softmax;
-        return simd_softmax(logits, logits);
+        // Create temporary buffer for input while computing output
+        let input = logits.to_vec();
+        return simd_softmax(&input, logits);
     }
 
     // Fallback to scalar implementation

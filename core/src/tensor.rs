@@ -54,7 +54,7 @@ impl TensorType {
     #[inline]
     pub const fn size(&self) -> usize {
         match self {
-            TensorType::F32 | TensorType::I32 => 4,
+            TensorType::F32 | TensorType::I32 | TensorType::U32 => 4,
             TensorType::F16 | TensorType::Bf16 | TensorType::I16 | TensorType::U16 => 2,
             TensorType::F64 | TensorType::I64 | TensorType::U64 => 8,
             TensorType::I8 | TensorType::U8 | TensorType::Bool => 1,
@@ -413,7 +413,7 @@ impl Tensor {
             return Ok(self.clone());
         }
 
-        let data = match &self.data {
+        let data = match &*self.data {
             TensorData::F16(v) => TensorData::F32(v.iter().map(|x| x.to_f32()).collect()),
             TensorData::Bf16(v) => TensorData::F32(v.iter().map(|x| x.to_f32()).collect()),
             TensorData::F64(v) => TensorData::F32(v.iter().map(|&x| x as f32).collect()),
@@ -426,7 +426,7 @@ impl Tensor {
 
     /// Get data as f32 slice (returns error if not f32)
     pub fn as_f32_slice(&self) -> Result<&[f32]> {
-        match &self.data {
+        match &*self.data {
             TensorData::F32(v) => Ok(v),
             _ => Err(Error::type_mismatch("f32", self.dtype.name())),
         }

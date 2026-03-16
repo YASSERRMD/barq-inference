@@ -18,9 +18,13 @@ tracing = { workspace = true }
 parking_lot = { workspace = true }
 rayon = { workspace = true }
 
+# GPU dependencies (optional)
+cudarc = { version = "0.12", optional = true }
+metal = { version = "0.28", optional = true }
+
 core = { path = "../core" }
 
 [features]
 default = []
-cuda = ["cudarc"]
-metal = ["metal"]
+cuda = ["dep:cudarc"]
+metal = ["dep:metal"]
