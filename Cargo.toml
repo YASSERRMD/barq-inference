@@ -5,8 +5,9 @@ members = [
     "vocab",
     "models",
     "backend",
-    "cli",
+    "sampling",
     "advanced",
+    "cli",
 ]
 resolver = "2"
 
