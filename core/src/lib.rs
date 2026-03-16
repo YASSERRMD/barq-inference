@@ -22,6 +22,7 @@ pub mod attention;
 pub mod rope;
 pub mod simd;
 pub mod simd_softmax;
+pub mod gemm;
 pub mod prelude;
 
 pub use error::{Error, Result};
