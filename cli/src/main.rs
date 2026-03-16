@@ -46,6 +46,10 @@ enum Commands {
         #[arg(short, long)]
         model: PathBuf,
 
+        /// Draft model path for speculative decoding (optional)
+        #[arg(long)]
+        draft_model: Option<PathBuf>,
+
         /// Prompt text
         #[arg(short, long)]
         prompt: String,
@@ -69,6 +73,20 @@ enum Commands {
         /// Context size
         #[arg(long, default_value = "2048")]
         context_size: usize,
+
+        // === Speculative Decoding Options ===
+
+        /// Enable speculative decoding
+        #[arg(long)]
+        speculative: bool,
+
+        /// Draft max tokens (speculation steps, default: 16)
+        #[arg(long, default_value = "16")]
+        draft_max: usize,
+
+        /// Speculation preset: code, creative, max-speed
+        #[arg(long)]
+        speculation_preset: Option<String>,
     },
 
     /// Interactive chat mode
@@ -215,14 +233,30 @@ async fn main() -> anyhow::Result<()> {
     match cli.command {
         Commands::Run {
             model,
+            draft_model,
             prompt,
             max_tokens,
             temperature,
             top_k,
             top_p,
             context_size,
+            speculative,
+            draft_max,
+            speculation_preset,
         } => {
-            cmd_run(model, prompt, max_tokens, temperature, top_k, top_p, context_size).await
+            cmd_run(
+                model,
+                draft_model,
+                prompt,
+                max_tokens,
+                temperature,
+                top_k,
+                top_p,
+                context_size,
+                speculative,
+                draft_max,
+                speculation_preset,
+            ).await
         }
 
         Commands::Chat {
@@ -267,20 +301,59 @@ async fn main() -> anyhow::Result<()> {
 
 async fn cmd_run(
     model: PathBuf,
+    draft_model: Option<PathBuf>,
     prompt: String,
     max_tokens: usize,
     temperature: f32,
     top_k: i32,
     top_p: f32,
     context_size: usize,
+    speculative: bool,
+    draft_max: usize,
+    speculation_preset: Option<String>,
 ) -> anyhow::Result<()> {
     info!("Loading model: {:?}", model);
     info!("Prompt: {}", prompt);
     info!("Max tokens: {}", max_tokens);
 
-    // TODO: Implement actual inference
-    println!("Running inference...");
-    println!("Prompt: {}", prompt);
+    // Determine if speculative decoding should be used
+    let use_speculative = speculative || draft_model.is_some();
+
+    if use_speculative {
+        info!("=== Speculative Decoding Mode ===");
+
+        // Determine draft model path
+        let draft_path = if let Some(draft) = draft_model {
+            draft
+        } else {
+            // Auto-select draft model
+            info!("Auto-selecting draft model based on target model...");
+            model.clone()
+        };
+
+        info!("Draft model: {:?}", draft_path);
+        info!("Draft max tokens: {}", draft_max);
+
+        if let Some(preset) = &speculation_preset {
+            info!("Speculation preset: {}", preset);
+        }
+
+        // TODO: Implement actual speculative decoding
+        // For now, just show what would be done
+        println!("\n[Speculative Decoding]");
+        println!("Target model: {:?}", model);
+        println!("Draft model: {:?}", draft_path);
+        println!("Draft max: {}", draft_max);
+        println!("\nTODO: Integrate with SpeculativeEngine");
+        println!("Prompt: {}", prompt);
+
+    } else {
+        info!("=== Standard Inference Mode ===");
+
+        // TODO: Implement actual inference
+        println!("Running inference...");
+        println!("Prompt: {}", prompt);
+    }
 
     Ok(())
 }
