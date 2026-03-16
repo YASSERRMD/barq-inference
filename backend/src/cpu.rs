@@ -5,7 +5,7 @@ use std::sync::Arc;
 use rayon::prelude::*;
 
 use crate::device::CpuDevice;
-use crate::buffer::CpuBuffer;
+use crate::buffer::{CpuBuffer, Buffer};
 use barq_core::tensor::{Tensor, TensorType, Shape};
 use barq_core::error::{Error, Result};
 
@@ -54,7 +54,7 @@ impl CpuBackend {
             ));
         }
 
-        let buffer_data = &mut buffer.data;
+        let buffer_data = buffer.data_mut();
         buffer_data[..data.len()].copy_from_slice(data);
 
         Ok(())

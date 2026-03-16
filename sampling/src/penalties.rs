@@ -21,7 +21,7 @@ impl crate::sampler::Sampler for RepetitionPenalty {
         for logit in logits.iter_mut() {
             logit.logit /= self.penalty;
         }
-        Err(core::error::Error::tensor("RepetitionPenalty must be used in a chain"))
+        Err(Error::tensor("RepetitionPenalty must be used in a chain"))
     }
 
     fn reset(&mut self) {}
@@ -52,7 +52,7 @@ impl crate::sampler::Sampler for FrequencyPenalty {
         for logit in logits.iter_mut() {
             logit.logit -= self.penalty;
         }
-        Err(core::error::Error::tensor("FrequencyPenalty must be used in a chain"))
+        Err(Error::tensor("FrequencyPenalty must be used in a chain"))
     }
 
     fn reset(&mut self) {}
@@ -83,7 +83,7 @@ impl crate::sampler::Sampler for PresencePenalty {
         for logit in logits.iter_mut() {
             logit.logit -= self.penalty;
         }
-        Err(core::error::Error::tensor("PresencePenalty must be used in a chain"))
+        Err(Error::tensor("PresencePenalty must be used in a chain"))
     }
 
     fn reset(&mut self) {}
@@ -140,7 +140,7 @@ impl crate::sampler::Sampler for MinP {
             }
         }
 
-        Err(core::error::Error::tensor("MinP must be used in a chain"))
+        Err(Error::tensor("MinP must be used in a chain"))
     }
 
     fn reset(&mut self) {}
@@ -216,7 +216,7 @@ impl crate::sampler::Sampler for Mirostat {
             logit.logit *= scaling_factor;
         }
 
-        Err(core::error::Error::tensor("Mirostat must be used in a chain"))
+        Err(Error::tensor("Mirostat must be used in a chain"))
     }
 
     fn reset(&mut self) {
@@ -275,7 +275,7 @@ impl crate::sampler::Sampler for Typical {
             }
         }
 
-        Err(core::error::Error::tensor("Typical must be used in a chain"))
+        Err(Error::tensor("Typical must be used in a chain"))
     }
 
     fn reset(&mut self) {}
@@ -310,7 +310,7 @@ impl crate::sampler::Sampler for XtcSampler {
             }
         }
 
-        Err(core::error::Error::tensor("XtcSampler must be used in a chain"))
+        Err(Error::tensor("XtcSampler must be used in a chain"))
     }
 
     fn reset(&mut self) {}

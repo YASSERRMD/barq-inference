@@ -2,6 +2,7 @@
 
 use barq_core::tensor::{Tensor, TensorType, Shape};
 use barq_core::error::{Error, Result};
+use barq_core::ops::{UnaryOp, BinaryOp};
 
 /// Tensor operation type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
