@@ -1,6 +1,7 @@
 //! Barq - High-performance LLM inference engine CLI
 
 mod performance;
+mod benchmark;
 
 use std::path::PathBuf;
 use clap::{Parser, Subcommand};
@@ -310,12 +311,36 @@ async fn cmd_benchmark(
     prompt_length: usize,
     gen_length: usize,
 ) -> anyhow::Result<()> {
+    use benchmark::{BenchmarkConfig, InferenceBenchmark};
+
     info!("Benchmarking model: {:?}", model);
     info!("Iterations: {}", iterations);
     info!("Prompt length: {}", prompt_length);
     info!("Generation length: {}", gen_length);
 
-    // TODO: Implement actual benchmarking
+    let config = BenchmarkConfig {
+        runs: iterations,
+        warmup_runs: 2,
+        prompt_length,
+        gen_length,
+        measure_ttft: true,
+        measure_memory: true,
+    };
+
+    let bench = InferenceBenchmark::with_config(config);
+
+    // TODO: Implement actual inference function
+    // For now, use a mock that simulates inference
+    let result = bench.run(|| {
+        // Simulate inference time
+        let simulated_time = std::time::Duration::from_millis(100);
+        std::thread::sleep(simulated_time);
+
+        let total_tokens = config.prompt_length + config.gen_length;
+        Ok((total_tokens, simulated_time))
+    });
+
+    result.print();
 
     Ok(())
 }
