@@ -19,6 +19,7 @@ pub mod gguf;
 pub mod quant;
 pub mod softmax;
 pub mod normalization;
+pub mod attention;
 pub mod prelude;
 
 pub use error::{Error, Result};
