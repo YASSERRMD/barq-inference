@@ -5,7 +5,7 @@ use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 
 use crate::sampler::{Sampler, SamplerType, TokenData};
-use core::error::{Error, Result};
+use barq_core::error::{Error, Result};
 
 /// Temperature sampler
 ///

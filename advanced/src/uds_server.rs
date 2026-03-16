@@ -10,7 +10,7 @@ use tokio::sync::{mpsc, oneshot, Semaphore};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use serde::{Deserialize, Serialize};
 
-use core::error::{Error, Result};
+use barq_core::error::{Error, Result};
 
 /// Inference request
 #[derive(Debug, Clone, Serialize, Deserialize)]

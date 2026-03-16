@@ -10,8 +10,8 @@
 //! - Recomputation: avoids storing the full attention matrix
 //! - SIMD-friendly operations for better vectorization
 
-use core::error::{Error, Result};
-use core::tensor::{Tensor, TensorType, TensorData, Shape};
+use barq_core::error::{Error, Result};
+use barq_core::tensor::{Tensor, TensorType, TensorData, Shape};
 
 /// Flash Attention-2 configuration
 #[derive(Debug, Clone)]

@@ -7,8 +7,8 @@
 //! - Efficient token management for long contexts
 
 use std::collections::VecDeque;
-use core::error::{Error, Result};
-use core::tensor::{Tensor, TensorType, TensorData, Shape};
+use barq_core::error::{Error, Result};
+use barq_core::tensor::{Tensor, TensorType, TensorData, Shape};
 
 /// KV cache entry for a single token position
 #[derive(Debug, Clone)]

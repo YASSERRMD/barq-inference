@@ -8,8 +8,8 @@ use tokio::sync::Mutex;
 
 use crate::loader::Model;
 use crate::arch::LlmArch;
-use core::tensor::{Tensor, TensorType, Shape};
-use core::error::{Error, Result};
+use barq_core::tensor::{Tensor, TensorType, Shape};
+use barq_core::error::{Error, Result};
 
 /// Inference context parameters
 #[derive(Debug, Clone)]

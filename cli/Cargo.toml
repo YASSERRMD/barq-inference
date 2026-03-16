@@ -35,7 +35,7 @@ cudarc = { version = "0.12", optional = true }
 metal = { version = "0.28", optional = true }
 
 # Internal crates
-core = { path = "../core" }
+barq_core = { path = "../barq_core" }
 vocab = { path = "../vocab" }
 models = { path = "../models" }
 backend = { path = "../backend" }

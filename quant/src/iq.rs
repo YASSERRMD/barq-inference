@@ -1,6 +1,6 @@
 //! IQ (Importance-aware Quantization) implementations
 
-use core::error::Result;
+use barq_core::error::Result;
 
 /// IQ quantization types
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

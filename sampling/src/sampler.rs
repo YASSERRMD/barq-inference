@@ -4,7 +4,7 @@ use rand::Rng;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 
-use core::error::{Error, Result};
+use barq_core::error::{Error, Result};
 
 /// Token data for sampling
 #[derive(Debug, Clone, Copy)]

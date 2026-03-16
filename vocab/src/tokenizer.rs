@@ -1,5 +1,8 @@
 //! Tokenizer trait and common implementations
 
+use std::pin;
+use std::future;
+use std::marker;
 use async_trait::async_trait;
 
 use crate::vocab::{TokenizationResult, Vocab, VocabType};
