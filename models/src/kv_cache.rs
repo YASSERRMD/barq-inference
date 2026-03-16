@@ -107,15 +107,15 @@ impl AdvancedKVCache {
         let k_shape = k.shape();
         let v_shape = v.shape();
 
-        if k_shape.dims.len() != 2 || v_shape.dims.len() != 2 {
+        if k_shape.dims().len() != 2 || v_shape.dims().len() != 2 {
             return Err(Error::tensor("K and V must be 2D tensors [num_heads, head_dim]"));
         }
 
-        if k_shape.dims[0] != self.num_heads || k_shape.dims[1] != self.head_dim {
+        if k_shape.dims()[0] != self.num_heads || k_shape.dims()[1] != self.head_dim {
             return Err(Error::tensor("K tensor shape mismatch"));
         }
 
-        if v_shape.dims[0] != self.num_heads || v_shape.dims[1] != self.head_dim {
+        if v_shape.dims()[0] != self.num_heads || v_shape.dims()[1] != self.head_dim {
             return Err(Error::tensor("V tensor shape mismatch"));
         }
 
