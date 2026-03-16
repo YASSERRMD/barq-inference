@@ -1,10 +1,12 @@
 # Barq Inference
 
-High-performance LLM inference engine implemented in Rust, providing a complete reimplementation of llama.cpp with advanced research capabilities.
+High-performance LLM inference engine implemented in Rust, inspired by llama.cpp and incorporating advanced research capabilities for faster token generation.
 
 ## Overview
 
-Barq Inference is a production-ready LLM inference engine that delivers 1.5-2x speedup over llama.cpp while maintaining full compatibility with GGUF models. Built from scratch in Rust, it provides memory safety, zero-cost abstractions, and modern async I/O throughout.
+Barq Inference is a production-ready LLM inference engine that delivers 1.5-2x speedup while maintaining full compatibility with GGUF models. This project is a complete Rust reimplementation inspired by [llama.cpp](https://github.com/ggerganov/llama.cpp) and [ik_llama.cpp](https://github.com/ikawrakow/ik_llama.cpp), incorporating their architectural innovations and optimization techniques. Built from scratch in Rust, it provides memory safety, zero-cost abstractions, and modern async I/O throughout.
+
+The implementation draws from research and optimizations including Flash Attention, SIMD-accelerated quantization kernels, advanced KV cache management, and speculative decoding to achieve superior inference performance.
 
 ## Features
 
