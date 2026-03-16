@@ -26,12 +26,8 @@ pub fn dequantize_q4_0_simd(
 
     #[cfg(target_arch = "aarch64")]
     {
-        use std::arch::aarch64::*;
-
         unsafe {
-            if is_aarch64_feature_detected!("neon") {
-                return dequantize_q4_0_neon(quants, scales, block_size, output);
-            }
+            return dequantize_q4_0_neon(quants, scales, block_size, output);
         }
     }
 
