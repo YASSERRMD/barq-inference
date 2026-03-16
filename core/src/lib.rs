@@ -17,6 +17,10 @@ pub mod ops;
 pub mod ops_ref;
 pub mod gguf;
 pub mod quant;
+pub mod softmax;
+pub mod normalization;
+pub mod attention;
+pub mod rope;
 pub mod prelude;
 
 pub use error::{Error, Result};
