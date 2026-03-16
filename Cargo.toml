@@ -1,12 +1,12 @@
 [workspace]
 members = [
-    "barq-core",
-    "barq-quant",
-    "barq-vocab",
-    "barq-models",
-    "barq-backend",
-    "barq-cli",
-    "barq-advanced",
+    "core",
+    "quant",
+    "vocab",
+    "models",
+    "backend",
+    "cli",
+    "advanced",
 ]
 resolver = "2"
 
