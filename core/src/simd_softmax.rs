@@ -35,7 +35,9 @@ pub fn simd_softmax(logits: &[f32], output: &mut [f32]) -> Result<()> {
 
     #[cfg(target_arch = "aarch64")]
     {
-        return softmax_neon(logits, output, max_logit);
+        unsafe {
+            return softmax_neon(logits, output, max_logit);
+        }
     }
 
     // Scalar fallback
