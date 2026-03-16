@@ -87,16 +87,12 @@ pub fn detect_simd() -> SIMDCapabilities {
 
     #[cfg(target_arch = "aarch64")]
     {
-        use std::arch::aarch64::*;
-
-        unsafe {
-            SIMDCapabilities {
-                platform,
-                avx2: false,
-                avx512: false,
-                neon: is_aarch64_feature_detected!("neon"),
-                sve: is_aarch64_feature_detected!("sve"), // ARMv9
-            }
+        SIMDCapabilities {
+            platform,
+            avx2: false,
+            avx512: false,
+            neon: true,  // All aarch64 has NEON
+            sve: false, // TODO: Detect SVE at runtime
         }
     }
 

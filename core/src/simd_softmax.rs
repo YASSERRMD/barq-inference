@@ -35,13 +35,7 @@ pub fn simd_softmax(logits: &[f32], output: &mut [f32]) -> Result<()> {
 
     #[cfg(target_arch = "aarch64")]
     {
-        use std::arch::aarch64::*;
-
-        unsafe {
-            if is_aarch64_feature_detected!("neon") {
-                return softmax_neon(logits, output, max_logit);
-            }
-        }
+        return softmax_neon(logits, output, max_logit);
     }
 
     // Scalar fallback
@@ -74,13 +68,7 @@ fn simd_reduce_max(arr: &[f32]) -> f32 {
 
     #[cfg(target_arch = "aarch64")]
     {
-        use std::arch::aarch64::*;
-
-        unsafe {
-            if is_aarch64_feature_detected!("neon") {
-                return reduce_max_neon(arr);
-            }
-        }
+        return reduce_max_neon(arr);
     }
 
     // Scalar fallback

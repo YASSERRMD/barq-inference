@@ -91,13 +91,7 @@ pub fn gemm_f32_with_config(
 
         #[cfg(target_arch = "aarch64")]
         {
-            use std::arch::aarch64::*;
-
-            unsafe {
-                if is_aarch64_feature_detected!("neon") {
-                    return gemm_neon_blocked(a, b, c, m, n, k, config);
-                }
-            }
+            return gemm_neon_blocked(a, b, c, m, n, k, config);
         }
     }
 
