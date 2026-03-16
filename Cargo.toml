@@ -1,0 +1,81 @@
+[workspace]
+members = [
+    "barq-core",
+    "barq-quant",
+    "barq-vocab",
+    "barq-models",
+    "barq-backend",
+    "barq-cli",
+    "barq-advanced",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["YASSERRMD <arafath.yasser@gmail.com>"]
+license = "MIT"
+repository = "https://github.com/YASSERRMD/barq-inference"
+description = "High-performance LLM inference engine in Rust"
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1.41", features = ["full"] }
+async-trait = "0.1"
+
+# Math and SIMD
+ndarray = { version = "0.16", features = ["rayon"] }
+nalgebra = "0.33"
+simba = "0.9"
+wide = "0.7"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+bincode = "1.3"
+
+# Error handling
+thiserror = "2.0"
+anyhow = "1.0"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Memory
+memmap2 = "0.9"
+bytemuck = { version = "1.20", features = ["derive"] }
+
+# Concurrency
+rayon = "1.10"
+parking_lot = "0.12"
+
+# Utilities
+half = { version = "2.5", features = ["serde", "std"] }
+num-traits = "0.2"
+num-derive = "0.4"
+itertools = "0.13"
+
+# Platform-specific
+[target.'cfg(target_arch = "x86_64")'.dependencies]
+core_arch = "0.3"
+
+[target.'cfg(target_arch = "aarch64")'.dependencies]
+core_arch = "0.3"
+
+# GPU (optional)
+cudarc = { version = "0.12", optional = true }
+metal = { version = "0.28", optional = true }
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = true
+panic = "abort"
+
+[profile.bench]
+inherits = "release"
+
+[profile.dev]
+opt-level = 0
