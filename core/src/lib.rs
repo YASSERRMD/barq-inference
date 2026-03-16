@@ -21,6 +21,7 @@ pub mod normalization;
 pub mod attention;
 pub mod rope;
 pub mod simd;
+pub mod simd_softmax;
 pub mod prelude;
 
 pub use error::{Error, Result};
