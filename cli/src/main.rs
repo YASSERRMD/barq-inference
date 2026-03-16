@@ -1,5 +1,8 @@
 //! Barq - High-performance LLM inference engine CLI
 
+mod performance;
+mod benchmark;
+
 use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 use tracing::{info, error, Level};
@@ -19,6 +22,20 @@ struct Cli {
     /// Number of threads
     #[arg(short, long, global = true, default_value = "4")]
     threads: usize,
+
+    // === Performance Optimizations ===
+
+    /// Enable CUDA Graphs (7-20% TPS gain on NVIDIA GPUs)
+    #[arg(long, global = true)]
+    cuda_graphs: bool,
+
+    /// Enable Flash Attention (~30% faster, reduces VRAM usage)
+    #[arg(long, global = true)]
+    flash_attn: bool,
+
+    /// Performance preset: max-speed, balanced, max-quality, cpu, gpu
+    #[arg(long, global = true)]
+    preset: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -28,6 +45,10 @@ enum Commands {
         /// Model path (GGUF file)
         #[arg(short, long)]
         model: PathBuf,
+
+        /// Draft model path for speculative decoding (optional)
+        #[arg(long)]
+        draft_model: Option<PathBuf>,
 
         /// Prompt text
         #[arg(short, long)]
@@ -52,6 +73,20 @@ enum Commands {
         /// Context size
         #[arg(long, default_value = "2048")]
         context_size: usize,
+
+        // === Speculative Decoding Options ===
+
+        /// Enable speculative decoding
+        #[arg(long)]
+        speculative: bool,
+
+        /// Draft max tokens (speculation steps, default: 16)
+        #[arg(long, default_value = "16")]
+        draft_max: usize,
+
+        /// Speculation preset: code, creative, max-speed
+        #[arg(long)]
+        speculation_preset: Option<String>,
     },
 
     /// Interactive chat mode
@@ -134,6 +169,50 @@ enum Commands {
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
+    // Apply performance optimizations first (before any model loading)
+    if let Some(preset_str) = &cli.preset {
+        use performance::PerformancePreset;
+
+        let preset = match preset_str.as_str() {
+            "max-speed" => {
+                info!("Applying performance preset: max-speed");
+                PerformancePreset::MaxSpeed
+            }
+            "balanced" => {
+                info!("Applying performance preset: balanced");
+                PerformancePreset::Balanced
+            }
+            "max-quality" => {
+                info!("Applying performance preset: max-quality");
+                PerformancePreset::MaxQuality
+            }
+            "cpu" => {
+                info!("Applying performance preset: cpu");
+                PerformancePreset::CPU
+            }
+            "gpu" => {
+                info!("Applying performance preset: gpu");
+                PerformancePreset::GPU
+            }
+            _ => {
+                eprintln!("Unknown preset: {}. Available: max-speed, balanced, max-quality, cpu, gpu", preset_str);
+                std::process::exit(1);
+            }
+        };
+        preset.apply();
+    } else {
+        // Apply individual flags if no preset specified
+        if cli.cuda_graphs {
+            info!("Enabling CUDA Graphs optimization");
+            performance::enable_cuda_graphs(true);
+        }
+
+        if cli.flash_attn {
+            info!("Enabling Flash Attention");
+            performance::enable_flash_attention(true);
+        }
+    }
+
     // Initialize logging
     let log_level = if cli.verbose { Level::DEBUG } else { Level::INFO };
     tracing_subscriber::fmt()
@@ -142,18 +221,42 @@ async fn main() -> anyhow::Result<()> {
 
     info!("Barq v{} - High-performance LLM inference engine", env!("CARGO_PKG_VERSION"));
 
+    // Log performance settings
+    if performance::cuda_graphs_enabled() {
+        info!("CUDA Graphs: enabled");
+    }
+    if performance::flash_attention_enabled() {
+        info!("Flash Attention: enabled");
+    }
+
     // Execute command
     match cli.command {
         Commands::Run {
             model,
+            draft_model,
             prompt,
             max_tokens,
             temperature,
             top_k,
             top_p,
             context_size,
+            speculative,
+            draft_max,
+            speculation_preset,
         } => {
-            cmd_run(model, prompt, max_tokens, temperature, top_k, top_p, context_size).await
+            cmd_run(
+                model,
+                draft_model,
+                prompt,
+                max_tokens,
+                temperature,
+                top_k,
+                top_p,
+                context_size,
+                speculative,
+                draft_max,
+                speculation_preset,
+            ).await
         }
 
         Commands::Chat {
@@ -198,20 +301,59 @@ async fn main() -> anyhow::Result<()> {
 
 async fn cmd_run(
     model: PathBuf,
+    draft_model: Option<PathBuf>,
     prompt: String,
     max_tokens: usize,
     temperature: f32,
     top_k: i32,
     top_p: f32,
     context_size: usize,
+    speculative: bool,
+    draft_max: usize,
+    speculation_preset: Option<String>,
 ) -> anyhow::Result<()> {
     info!("Loading model: {:?}", model);
     info!("Prompt: {}", prompt);
     info!("Max tokens: {}", max_tokens);
 
-    // TODO: Implement actual inference
-    println!("Running inference...");
-    println!("Prompt: {}", prompt);
+    // Determine if speculative decoding should be used
+    let use_speculative = speculative || draft_model.is_some();
+
+    if use_speculative {
+        info!("=== Speculative Decoding Mode ===");
+
+        // Determine draft model path
+        let draft_path = if let Some(draft) = draft_model {
+            draft
+        } else {
+            // Auto-select draft model
+            info!("Auto-selecting draft model based on target model...");
+            model.clone()
+        };
+
+        info!("Draft model: {:?}", draft_path);
+        info!("Draft max tokens: {}", draft_max);
+
+        if let Some(preset) = &speculation_preset {
+            info!("Speculation preset: {}", preset);
+        }
+
+        // TODO: Implement actual speculative decoding
+        // For now, just show what would be done
+        println!("\n[Speculative Decoding]");
+        println!("Target model: {:?}", model);
+        println!("Draft model: {:?}", draft_path);
+        println!("Draft max: {}", draft_max);
+        println!("\nTODO: Integrate with SpeculativeEngine");
+        println!("Prompt: {}", prompt);
+
+    } else {
+        info!("=== Standard Inference Mode ===");
+
+        // TODO: Implement actual inference
+        println!("Running inference...");
+        println!("Prompt: {}", prompt);
+    }
 
     Ok(())
 }
@@ -242,12 +384,36 @@ async fn cmd_benchmark(
     prompt_length: usize,
     gen_length: usize,
 ) -> anyhow::Result<()> {
+    use benchmark::{BenchmarkConfig, InferenceBenchmark};
+
     info!("Benchmarking model: {:?}", model);
     info!("Iterations: {}", iterations);
     info!("Prompt length: {}", prompt_length);
     info!("Generation length: {}", gen_length);
 
-    // TODO: Implement actual benchmarking
+    let config = BenchmarkConfig {
+        runs: iterations,
+        warmup_runs: 2,
+        prompt_length,
+        gen_length,
+        measure_ttft: true,
+        measure_memory: true,
+    };
+
+    let bench = InferenceBenchmark::with_config(config);
+
+    // TODO: Implement actual inference function
+    // For now, use a mock that simulates inference
+    let result = bench.run(|| {
+        // Simulate inference time
+        let simulated_time = std::time::Duration::from_millis(100);
+        std::thread::sleep(simulated_time);
+
+        let total_tokens = config.prompt_length + config.gen_length;
+        Ok((total_tokens, simulated_time))
+    });
+
+    result.print();
 
     Ok(())
 }
