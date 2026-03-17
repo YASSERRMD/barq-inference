@@ -107,8 +107,8 @@ impl BlockQ2K {
                 0
             };
 
-            let m_quant = if max_m > 0.0 {
-                ((-min_val).min(0.0).abs() / max_m * 15.0).min(15.0).max(0.0) as u8
+            let m_quant = if max_m > 0.0 && min_val < 0.0 {
+                (-min_val / max_m * 15.0).min(15.0).max(0.0) as u8
             } else {
                 0
             };
