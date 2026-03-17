@@ -13,8 +13,8 @@
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 
-use core::error::{Error, Result};
-use core::tensor::{Tensor, TensorType, TensorData, Shape};
+use barq_core::error::{Error, Result};
+use barq_core::tensor::{Tensor, TensorType, TensorData, Shape};
 
 /// Speculative decoding configuration
 #[derive(Debug, Clone)]
@@ -127,8 +127,11 @@ impl SpeculativeDecoding {
         F: FnMut(&[i32]) -> Result<(i32, Vec<f32>)> + Send + 'static,
         G: FnMut(&[i32]) -> Result<Vec<i32>> + Send + 'static,
     {
-        let _permit = self.semaphore.acquire().await
-            .map_err(|e| Error::Backend(format!("Semaphore error: {}", e)))?;
+        {
+            let _permit = self.semaphore.acquire().await
+                .map_err(|e| Error::Backend(format!("Semaphore error: {}", e)))?;
+            // permit is dropped here, releasing the semaphore
+        }
 
         let mut output = Vec::new();
         let mut current_tokens = prompt_tokens.to_vec();

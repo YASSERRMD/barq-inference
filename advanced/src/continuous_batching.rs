@@ -9,11 +9,11 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use core::error::{Error, Result};
-use core::tensor::Tensor;
+use barq_core::error::{Error, Result};
+use barq_core::tensor::Tensor;
 
 /// Active sequence in batch
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ActiveSequence {
     pub seq_id: i32,
     pub tokens: Vec<i32>,
@@ -56,7 +56,7 @@ impl BatchScheduler {
     }
 
     /// Add a new request to the pending queue
-    pub fn add_request(&mut self, tokens: Vec<i32>, max_tokens: usize) -> Result<Vec<i32>> {
+    pub async fn add_request(&mut self, tokens: Vec<i32>, max_tokens: usize) -> Result<Vec<i32>> {
         let (response_tx, response_rx) = tokio::sync::oneshot::channel();
 
         self.pending.push_back(PendingRequest {

@@ -16,7 +16,7 @@ Cargo.lock
 *.gguf
 *.gguf.*
 *.bin
-models/
+tmp_models/
 *.safetensors
 
 # Logs

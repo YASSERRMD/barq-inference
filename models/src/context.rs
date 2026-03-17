@@ -8,8 +8,8 @@ use tokio::sync::Mutex;
 
 use crate::loader::Model;
 use crate::arch::LlmArch;
-use core::tensor::{Tensor, TensorType, Shape};
-use core::error::{Error, Result};
+use barq_core::tensor::{Tensor, TensorType, Shape};
+use barq_core::error::{Error, Result};
 
 /// Inference context parameters
 #[derive(Debug, Clone)]
@@ -261,20 +261,28 @@ impl ModelContext {
 
     /// Encode a batch of tokens (no KV cache)
     pub async fn encode(&self, batch: &Batch) -> Result<Vec<f32>> {
-        // TODO: Implement actual encoding
-        // For now, return dummy logits
-        let n_vocab = self.model.hparams.n_vocab as usize;
-        let logits = vec![0.0; n_vocab];
+        use crate::transformer::LlamaTransformer;
+
+        let transformer = LlamaTransformer::new(self.model.clone())?;
+
+        // Run forward pass through all transformer layers
+        let mut cache = self.kv_cache.lock().await;
+        let logits = transformer.forward(&batch.token, &mut cache)?;
+
         Ok(logits)
     }
 
     /// Decode a batch of tokens (uses KV cache)
     pub async fn decode(&self, batch: &Batch) -> Result<Vec<f32>> {
-        let mut pos = self.pos.lock().await;
+        use crate::transformer::LlamaTransformer;
 
-        // TODO: Implement actual decoding with KV cache
-        let n_vocab = self.model.hparams.n_vocab as usize;
-        let logits = vec![0.0; n_vocab];
+        let transformer = LlamaTransformer::new(self.model.clone())?;
+
+        let mut pos = self.pos.lock().await;
+        let mut cache = self.kv_cache.lock().await;
+
+        // Run forward pass with KV cache
+        let logits = transformer.forward(&batch.token, &mut cache)?;
 
         *pos += batch.n_tokens as usize;
 
@@ -283,26 +291,104 @@ impl ModelContext {
 
     /// Sample a token from logits
     pub fn sample(&self, logits: &[f32], temperature: f32, top_k: i32, top_p: f32) -> Result<i32> {
-        // TODO: Implement proper sampling
-        // For now, return argmax
-        let max_id = logits
+        // Check for NaN or empty logits
+        if logits.is_empty() {
+            return Err(Error::tensor("Empty logits"));
+        }
+
+        // Filter out NaN values
+        let valid_logits: Vec<(usize, f32)> = logits
             .iter()
             .enumerate()
-            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
-            .map(|(i, _)| i as i32)
-            .unwrap();
+            .filter(|&(_, &logit)| !logit.is_nan())
+            .map(|(i, &logit)| (i, logit))
+            .collect();
 
-        Ok(max_id)
+        if valid_logits.is_empty() {
+            return Err(Error::tensor("All logits are NaN"));
+        }
+
+        let mut token_data = valid_logits;
+
+        // Sort by logit value (descending)
+        token_data.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        // Apply temperature
+        if temperature > 0.0 && temperature != 1.0 {
+            for (_, logit) in token_data.iter_mut() {
+                *logit /= temperature;
+            }
+        }
+
+        // Apply top-k sampling
+        if top_k > 0 && top_k < token_data.len() as i32 {
+            token_data.truncate(top_k as usize);
+        }
+
+        // Apply top-p (nucleus) sampling
+        if top_p < 1.0 {
+            // Compute softmax probabilities
+            let max_logit = token_data.first().map(|&(_, l)| l).unwrap_or(0.0f32);
+            let exp_sum: f32 = token_data.iter()
+                .map(|&(_, l)| (l - max_logit).exp())
+                .sum();
+
+            let mut cumulative = 0.0f32;
+            let mut cutoff_idx = token_data.len();
+
+            for (i, &(_, logit)) in token_data.iter().enumerate() {
+                let prob = (logit - max_logit).exp() / exp_sum;
+                cumulative += prob;
+                if cumulative >= top_p {
+                    cutoff_idx = i + 1;
+                    break;
+                }
+            }
+
+            token_data.truncate(cutoff_idx);
+        }
+
+        // Sample from remaining tokens
+        if token_data.is_empty() {
+            // Fallback to argmax over all tokens
+            return Ok(logits
+                .iter()
+                .enumerate()
+                .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+                .map(|(i, _)| i as i32)
+                .unwrap());
+        }
+
+        // Compute final probabilities
+        let max_logit = token_data.first().map(|&(_, l)| l).unwrap_or(0.0f32);
+        let exp_sum: f32 = token_data.iter()
+            .map(|&(_, l)| (l - max_logit).exp())
+            .sum();
+
+        // Sample
+        let r: f32 = rand::random();
+        let mut cumulative = 0.0f32;
+
+        for (idx, &(_, logit)) in token_data.iter().enumerate() {
+            let prob = (logit - max_logit).exp() / exp_sum;
+            cumulative += prob;
+            if r <= cumulative {
+                return Ok(token_data[idx].0 as i32);
+            }
+        }
+
+        // Fallback to last token
+        Ok(token_data.last().map(|&(i, _)| i as i32).unwrap())
     }
 
     /// Generate tokens
-    pub async fn generate(&self, tokens: &[i32], max_tokens: usize) -> Result<Vec<i32>> {
+    pub async fn generate(&self, tokens: &[i32], max_tokens: usize, temperature: f32, top_k: i32, top_p: f32) -> Result<Vec<i32>> {
         let mut output = Vec::new();
         let mut current_tokens = tokens.to_vec();
 
         // Process prompt
         let batch = Batch::from_tokens(&current_tokens);
-        let logits = self.encode(&batch).await?;
+        let _logits = self.encode(&batch).await?;
 
         // Generate tokens
         for _ in 0..max_tokens {
@@ -310,12 +396,12 @@ impl ModelContext {
             let batch = Batch::single(last_token);
             let logits = self.decode(&batch).await?;
 
-            let token = self.sample(&logits, 0.8, 40, 0.95)?;
+            let token = self.sample(&logits, temperature, top_k, top_p)?;
             output.push(token);
             current_tokens.push(token);
 
             // Check for EOS
-            if token == 0 {
+            if token == 0 || token == 2 {
                 break;
             }
         }

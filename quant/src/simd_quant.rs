@@ -2,7 +2,7 @@
 //!
 //! This module provides accelerated dequantization using SIMD intrinsics
 
-use core::error::Result;
+use barq_core::error::Result;
 
 /// Dequantize Q4_0 block using SIMD
 ///
@@ -26,12 +26,8 @@ pub fn dequantize_q4_0_simd(
 
     #[cfg(target_arch = "aarch64")]
     {
-        use std::arch::aarch64::*;
-
         unsafe {
-            if is_aarch64_feature_detected!("neon") {
-                return dequantize_q4_0_neon(quants, scales, block_size, output);
-            }
+            return dequantize_q4_0_neon(quants, scales, block_size, output);
         }
     }
 
@@ -177,7 +173,7 @@ unsafe fn dequantize_q4_0_neon(
 
             // Load and multiply by scale
             let vals = vld1q_f32(deq_vals.as_ptr());
-            let result = vfmulq_f32(vals, scale_vec);
+            let result = vmulq_f32(vals, scale_vec);
             vst1q_f32(output.as_mut_ptr().add(i), result);
 
             i += 4;
