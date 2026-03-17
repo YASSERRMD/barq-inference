@@ -28,3 +28,36 @@ pub struct BlockQ2K {
     pub d: u16,
     pub dmin: u16,
 }
+
+impl BlockQ2K {
+    pub const fn size_bytes() -> usize {
+        QK_K / 16 + QK_K / 4 + 2 + 2
+    }
+
+    pub fn dequantize(&self, output: &mut [f32]) {
+        let d = f16_to_f32(self.d);
+        let dmin = f16_to_f32(self.dmin);
+
+        let mut output_offset = 0usize;
+
+        for block_idx in 0..16 {
+            let sc = (self.scales[block_idx] & 0x0F) as f32;
+            let m = (self.scales[block_idx] >> 4) as f32;
+
+            let scale = d * sc;
+            let min = dmin * m;
+
+            let qs_start = block_idx * 4;
+            for i in 0..4 {
+                let q = self.qs[qs_start + i];
+                for b in 0..4 {
+                    let val = ((q >> (2 * b)) & 0x03) as f32;
+                    if output_offset < output.len() {
+                        output[output_offset] = scale * val - min;
+                        output_offset += 1;
+                    }
+                }
+            }
+        }
+    }
+}
