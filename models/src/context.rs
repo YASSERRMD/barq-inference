@@ -261,68 +261,28 @@ impl ModelContext {
 
     /// Encode a batch of tokens (no KV cache)
     pub async fn encode(&self, batch: &Batch) -> Result<Vec<f32>> {
-        // Simple forward pass through embedding + output layer
-        let n_vocab = self.model.hparams.n_vocab as usize;
-        let n_embd = self.model.hparams.n_embd as usize;
+        use crate::transformer::LlamaTransformer;
 
-        // Get token embeddings matrix
-        let tokens_emb = self.model.get_tensor("tok_embeddings.weight").await;
-        let output_emb = self.model.get_tensor("output.weight").await;
+        let transformer = LlamaTransformer::new(self.model.clone())?;
 
-        if tokens_emb.is_none() || output_emb.is_none() {
-            // Return random logits if tensors not loaded
-            return Ok(vec![0.0; n_vocab]);
-        }
-
-        let tokens_emb = tokens_emb.unwrap();
-        let output_emb = output_emb.unwrap();
-
-        // Compute sum of token embeddings for all tokens in batch
-        let mut hidden = vec![0.0f32; n_embd];
-
-        for &token_id in &batch.token {
-            if token_id >= 0 && (token_id as usize) < tokens_emb.shape().dims()[0] {
-                let emb_data = tokens_emb.as_f32_slice()?;
-                let offset = (token_id as usize) * n_embd;
-
-                for i in 0..n_embd {
-                    if offset + i < emb_data.len() {
-                        hidden[i] += emb_data[offset + i];
-                    }
-                }
-            }
-        }
-
-        // Normalize by number of tokens
-        if !batch.token.is_empty() {
-            for h in hidden.iter_mut() {
-                *h /= batch.token.len() as f32;
-            }
-        }
-
-        // Project to vocabulary logits
-        let output_data = output_emb.as_f32_slice()?;
-        let mut logits = vec![0.0f32; n_vocab];
-
-        for i in 0..n_vocab {
-            let mut sum = 0.0f32;
-            for j in 0..n_embd {
-                if i * n_embd + j < output_data.len() {
-                    sum += hidden[j] * output_data[i * n_embd + j];
-                }
-            }
-            logits[i] = sum;
-        }
+        // Run forward pass through all transformer layers
+        let mut cache = self.kv_cache.lock().await;
+        let logits = transformer.forward(&batch.token, &mut cache)?;
 
         Ok(logits)
     }
 
     /// Decode a batch of tokens (uses KV cache)
     pub async fn decode(&self, batch: &Batch) -> Result<Vec<f32>> {
-        let mut pos = self.pos.lock().await;
+        use crate::transformer::LlamaTransformer;
 
-        // For now, decode is same as encode (simplified)
-        let logits = self.encode(batch).await?;
+        let transformer = LlamaTransformer::new(self.model.clone())?;
+
+        let mut pos = self.pos.lock().await;
+        let mut cache = self.kv_cache.lock().await;
+
+        // Run forward pass with KV cache
+        let logits = transformer.forward(&batch.token, &mut cache)?;
 
         *pos += batch.n_tokens as usize;
 
@@ -331,15 +291,27 @@ impl ModelContext {
 
     /// Sample a token from logits
     pub fn sample(&self, logits: &[f32], temperature: f32, top_k: i32, top_p: f32) -> Result<i32> {
-        // Convert logits to token data format for sampling
-        let mut token_data: Vec<(usize, f32)> = logits
+        // Check for NaN or empty logits
+        if logits.is_empty() {
+            return Err(Error::tensor("Empty logits"));
+        }
+
+        // Filter out NaN values
+        let valid_logits: Vec<(usize, f32)> = logits
             .iter()
             .enumerate()
+            .filter(|&(_, &logit)| !logit.is_nan())
             .map(|(i, &logit)| (i, logit))
             .collect();
 
+        if valid_logits.is_empty() {
+            return Err(Error::tensor("All logits are NaN"));
+        }
+
+        let mut token_data = valid_logits;
+
         // Sort by logit value (descending)
-        token_data.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+        token_data.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
         // Apply temperature
         if temperature > 0.0 && temperature != 1.0 {
