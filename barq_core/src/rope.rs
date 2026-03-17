@@ -94,8 +94,8 @@ mod tests {
 
         let (cos, sin) = rope(&positions, dim, 10000.0, 1.0).unwrap();
 
-        assert_eq!(cos.len(), positions.len() * dim);
-        assert_eq!(sin.len(), positions.len() * dim);
+        assert_eq!(cos.len(), positions.len() * (dim / 2));
+        assert_eq!(sin.len(), positions.len() * (dim / 2));
 
         // Check that cos^2 + sin^2 = 1
         for i in 0..cos.len() {

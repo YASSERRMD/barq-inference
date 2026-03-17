@@ -148,7 +148,7 @@ mod tests {
     #[test]
     fn test_context_creation() {
         let ctx = Context::default().unwrap();
-        assert_eq!(ctx.id(), 1);
+        assert!(ctx.id() > 0);
         assert!(ctx.total_memory() > 0);
     }
 

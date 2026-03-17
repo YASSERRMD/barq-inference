@@ -297,26 +297,48 @@ fn get_cpu_name() -> String {
 
 /// Get system memory in MB
 fn get_system_memory_mb() -> usize {
-    #[cfg(unix)]
+    #[cfg(target_os = "macos")]
     {
         use std::process::Command;
-
         let output = Command::new("sysctl").args(["-n", "hw.memsize"]).output();
-
-        match output {
-            Ok(output) => {
-                let mem_str = String::from_utf8_lossy(&output.stdout);
-                let mem_bytes: u64 = mem_str.trim().parse().unwrap_or(0);
-                (mem_bytes / (1024 * 1024)) as usize
+        if let Ok(output) = output {
+            let mem_str = String::from_utf8_lossy(&output.stdout);
+            if let Ok(mem_bytes) = mem_str.trim().parse::<u64>() {
+                return (mem_bytes / (1024 * 1024)) as usize;
             }
-            Err(_) => 0,
         }
     }
 
-    #[cfg(not(unix))]
+    #[cfg(target_os = "linux")]
     {
-        0
+        use std::fs::read_to_string;
+        if let Ok(meminfo) = read_to_string("/proc/meminfo") {
+            for line in meminfo.lines() {
+                if line.starts_with("MemTotal:") {
+                    let parts: Vec<&str> = line.split_whitespace().collect();
+                    if parts.len() >= 2 {
+                        if let Ok(mem_kb) = parts[1].parse::<u64>() {
+                            return (mem_kb / 1024) as usize;
+                        }
+                    }
+                }
+            }
+        }
     }
+
+    #[cfg(all(unix, not(any(target_os = "macos", target_os = "linux"))))]
+    {
+        use std::process::Command;
+        let output = Command::new("sysctl").args(["-n", "hw.physmem"]).output();
+        if let Ok(output) = output {
+            let mem_str = String::from_utf8_lossy(&output.stdout);
+            if let Ok(mem_bytes) = mem_str.trim().parse::<u64>() {
+                return (mem_bytes / (1024 * 1024)) as usize;
+            }
+        }
+    }
+
+    0
 }
 
 /// Print platform information
