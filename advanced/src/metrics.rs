@@ -104,10 +104,10 @@ impl InferenceMetrics {
         }
     }
 
-    // TODO: Implement proper JSON export (AtomicU64 doesn't implement Serialize)
-    // pub fn export_json(&self) -> Result<String, serde_json::Error> {
-    //     serde_json::to_string(self)
-    // }
+    /// Implement proper JSON export (AtomicU64 doesn't implement Serialize)
+    pub fn export_json(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string(&self.snapshot())
+    }
 }
 
 impl Default for InferenceMetrics {
