@@ -314,9 +314,9 @@ mod tests {
         let k_data = vec![2.0f32; 1 * 2 * 2 * 4];
         let v_data = vec![3.0f32; 1 * 2 * 2 * 4];
 
-        let q_shape = Shape::new(&[1, 2, 2, 4]);
-        let k_shape = Shape::new(&[1, 2, 2, 4]);
-        let v_shape = Shape::new(&[1, 2, 2, 4]);
+        let q_shape = Shape::new(vec![1, 2, 2, 4]);
+        let k_shape = Shape::new(vec![1, 2, 2, 4]);
+        let v_shape = Shape::new(vec![1, 2, 2, 4]);
 
         let q = Tensor::new(None, TensorType::F32, q_shape, TensorData::F32(q_data)).unwrap();
         let k = Tensor::new(None, TensorType::F32, k_shape, TensorData::F32(k_data)).unwrap();
@@ -327,6 +327,6 @@ mod tests {
         assert!(result.is_ok());
 
         let output = result.unwrap();
-        assert_eq!(output.shape().dims, &[1, 2, 2, 4]);
+        assert_eq!(output.shape().dims(), &[1, 2, 2, 4]);
     }
 }
