@@ -21,10 +21,7 @@ pub enum Error {
 
     /// Type mismatch
     #[error("Type mismatch: expected {expected}, found {found}")]
-    TypeMismatch {
-        expected: String,
-        found: String,
-    },
+    TypeMismatch { expected: String, found: String },
 
     /// Dimension mismatch
     #[error("Dimension mismatch: {0}")]
@@ -52,10 +49,7 @@ pub enum Error {
 
     /// Out of bounds access
     #[error("Index out of bounds: {index} in shape {shape:?}")]
-    OutOfBounds {
-        index: usize,
-        shape: Vec<usize>,
-    },
+    OutOfBounds { index: usize, shape: Vec<usize> },
 
     /// Unsupported operation
     #[error("Unsupported operation: {0}")]

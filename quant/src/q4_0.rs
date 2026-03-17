@@ -2,8 +2,8 @@
 //!
 //! 4-bit quantization with scale per block
 
-use barq_core::tensor::{Tensor, TensorType, Shape};
 use barq_core::error::{Error, Result};
+use barq_core::tensor::{Shape, Tensor, TensorType};
 
 /// Q4_0 quantization: 4-bit weights with per-block scale
 ///
@@ -18,9 +18,7 @@ pub struct Q4_0 {
 
 impl Q4_0 {
     pub fn new() -> Self {
-        Self {
-            block_size: 32,
-        }
+        Self { block_size: 32 }
     }
 
     pub fn quantize(&self, input: &[f32]) -> Result<Vec<u8>> {
@@ -38,11 +36,7 @@ impl Q4_0 {
             let max_abs = block.iter().fold(0.0f32, |acc, &x| acc.max(x.abs()));
 
             // Compute scale: max_abs / -8.0 (since 4-bit signed range is -8 to 7)
-            let scale = if max_abs == 0.0 {
-                0.0
-            } else {
-                max_abs / 8.0
-            };
+            let scale = if max_abs == 0.0 { 0.0 } else { max_abs / 8.0 };
 
             // Quantize block
             let mut quants = vec![0u8; (block.len() + 1) / 2];
@@ -145,7 +139,11 @@ mod tests {
         assert_eq!(dequantized.len(), input.len());
 
         // Check values are approximately correct (within quantization error for Q4_0 limits)
-        for (i, (&orig, &deq)) in input.iter().zip(dequantized[..input.len()].iter()).enumerate() {
+        for (i, (&orig, &deq)) in input
+            .iter()
+            .zip(dequantized[..input.len()].iter())
+            .enumerate()
+        {
             let error = (orig - deq).abs();
             assert!(error < 1.5, "Error at index {}: {} vs {}", i, orig, deq);
         }

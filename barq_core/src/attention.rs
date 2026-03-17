@@ -1,9 +1,9 @@
 //! Multi-head attention implementation
 
-use crate::tensor::{Tensor, TensorType, Shape, TensorData};
 use crate::error::{Error, Result};
-use crate::softmax;
 use crate::normalization;
+use crate::softmax;
+use crate::tensor::{Shape, Tensor, TensorData, TensorType};
 
 /// Attention configuration
 #[derive(Debug, Clone)]
@@ -54,14 +54,11 @@ impl MultiHeadAttention {
     /// - v: [batch_size, n_heads, seq_len, head_dim]
     ///
     /// Output shape: [batch_size, seq_len, n_heads * head_dim]
-    pub fn forward(
-        &self,
-        q: &Tensor,
-        k: &Tensor,
-        v: &Tensor,
-    ) -> Result<Tensor> {
+    pub fn forward(&self, q: &Tensor, k: &Tensor, v: &Tensor) -> Result<Tensor> {
         if q.dtype() != TensorType::F32 {
-            return Err(Error::Unsupported("Attention requires f32 tensors".to_string()));
+            return Err(Error::Unsupported(
+                "Attention requires f32 tensors".to_string(),
+            ));
         }
 
         let q_shape = q.shape().dims();

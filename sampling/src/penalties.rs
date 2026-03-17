@@ -257,9 +257,7 @@ impl crate::sampler::Sampler for Typical {
             max_logit = max_logit.max(logit.logit);
         }
 
-        let mut probs: Vec<f32> = logits.iter()
-            .map(|x| (x.logit - max_logit).exp())
-            .collect();
+        let mut probs: Vec<f32> = logits.iter().map(|x| (x.logit - max_logit).exp()).collect();
 
         let sum: f32 = probs.iter().sum();
         if sum > 0.0 {
@@ -371,9 +369,7 @@ pub fn apply_min_p(logits: &mut [f32], min_p: f32) -> Result<()> {
 
     // Compute softmax
     let max_logit = logits.iter().fold(f32::NEG_INFINITY, |a, b| a.max(*b));
-    let mut probs: Vec<f32> = logits.iter()
-        .map(|x| (x - max_logit).exp())
-        .collect();
+    let mut probs: Vec<f32> = logits.iter().map(|x| (x - max_logit).exp()).collect();
 
     let sum: f32 = probs.iter().sum();
     if sum > 0.0 {
@@ -403,11 +399,7 @@ pub struct MirostatSampler {
 
 impl MirostatSampler {
     pub fn new(tau: f32, eta: f32) -> Self {
-        Self {
-            tau,
-            eta,
-            mu: 0.0,
-        }
+        Self { tau, eta, mu: 0.0 }
     }
 }
 
@@ -415,9 +407,7 @@ impl MirostatSampler {
     pub fn apply(&mut self, logits: &mut [f32]) -> Result<()> {
         // Compute softmax
         let max_logit = logits.iter().fold(f32::NEG_INFINITY, |a, b| a.max(*b));
-        let mut probs: Vec<f32> = logits.iter()
-            .map(|x| (x - max_logit).exp())
-            .collect();
+        let mut probs: Vec<f32> = logits.iter().map(|x| (x - max_logit).exp()).collect();
 
         let sum: f32 = probs.iter().sum();
         if sum > 0.0 {
@@ -456,9 +446,7 @@ pub fn apply_typical_sampling(logits: &mut [f32], typical_p: f32) -> Result<()> 
 
     // Compute softmax
     let max_logit = logits.iter().fold(f32::NEG_INFINITY, |a, b| a.max(*b));
-    let probs: Vec<f32> = logits.iter()
-        .map(|x| (x - max_logit).exp())
-        .collect();
+    let probs: Vec<f32> = logits.iter().map(|x| (x - max_logit).exp()).collect();
 
     let sum: f32 = probs.iter().sum();
     if sum > 0.0 {
@@ -497,4 +485,3 @@ mod tests {
         assert!(apply_min_p(&mut logits, 0.3).is_ok());
     }
 }
-

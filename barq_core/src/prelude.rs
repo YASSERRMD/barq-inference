@@ -1,7 +1,7 @@
 //! Prelude module for common imports
 
-pub use crate::error::{Error, Result};
-pub use crate::tensor::{Tensor, TensorType, Shape};
 pub use crate::context::Context;
-pub use crate::memory::{MemoryType, MemoryBuffer, Allocator};
-pub use crate::quant::{QuantizationType, Quantize, Dequantize};
+pub use crate::error::{Error, Result};
+pub use crate::memory::{Allocator, MemoryBuffer, MemoryType};
+pub use crate::quant::{Dequantize, QuantizationType, Quantize};
+pub use crate::tensor::{Shape, Tensor, TensorType};

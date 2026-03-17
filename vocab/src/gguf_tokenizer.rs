@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::tokenizer::{Tokenizer, TokenizerType};
-use crate::vocab::{Vocab, VocabType, TokenizationResult};
+use crate::vocab::{TokenizationResult, Vocab, VocabType};
 use anyhow::Result;
 
 /// Simple GGUF tokenizer
@@ -118,10 +118,14 @@ impl Tokenizer for GgufTokenizer {
     async fn tokenize(&self, text: &str, add_special: bool) -> Result<TokenizationResult> {
         let ids = self.tokenize_bytes(text);
 
-        let tokens: Vec<String> = ids.iter()
-            .map(|&id| self.id_to_token.get(&id)
-                .cloned()
-                .unwrap_or_else(|| format!("<token_{}>", id)))
+        let tokens: Vec<String> = ids
+            .iter()
+            .map(|&id| {
+                self.id_to_token
+                    .get(&id)
+                    .cloned()
+                    .unwrap_or_else(|| format!("<token_{}>", id))
+            })
             .collect();
 
         Ok(TokenizationResult::new(ids, tokens))

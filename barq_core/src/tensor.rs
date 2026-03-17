@@ -64,7 +64,10 @@ impl TensorType {
     /// Returns true if this is a floating point type
     #[inline]
     pub const fn is_float(&self) -> bool {
-        matches!(self, TensorType::F32 | TensorType::F16 | TensorType::Bf16 | TensorType::F64)
+        matches!(
+            self,
+            TensorType::F32 | TensorType::F16 | TensorType::Bf16 | TensorType::F64
+        )
     }
 
     /// Returns true if this is an integer type
@@ -120,8 +123,14 @@ pub struct Shape {
 impl Shape {
     /// Create a new shape from dimensions
     pub fn new(dims: Vec<usize>) -> Self {
-        assert!(!dims.is_empty() && dims.len() <= MAX_DIMS, "Invalid shape dimensions");
-        assert!(dims.iter().all(|&d| d > 0), "Invalid shape: dimensions must be positive");
+        assert!(
+            !dims.is_empty() && dims.len() <= MAX_DIMS,
+            "Invalid shape dimensions"
+        );
+        assert!(
+            dims.iter().all(|&d| d > 0),
+            "Invalid shape: dimensions must be positive"
+        );
         Self { dims }
     }
 
@@ -300,7 +309,12 @@ pub struct Tensor {
 
 impl Tensor {
     /// Create a new tensor
-    pub fn new(name: Option<String>, dtype: TensorType, shape: Shape, data: TensorData) -> Result<Self> {
+    pub fn new(
+        name: Option<String>,
+        dtype: TensorType,
+        shape: Shape,
+        data: TensorData,
+    ) -> Result<Self> {
         if data.len() != shape.num_elements() {
             return Err(Error::invalid_shape(shape.dims().to_vec()));
         }
@@ -436,7 +450,11 @@ impl Tensor {
 impl fmt::Display for Tensor {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if let Some(name) = &self.name {
-            write!(f, "Tensor('{}', dtype={}, shape={})", name, self.dtype, self.shape)
+            write!(
+                f,
+                "Tensor('{}', dtype={}, shape={})",
+                name, self.dtype, self.shape
+            )
         } else {
             write!(f, "Tensor(dtype={}, shape={})", self.dtype, self.shape)
         }

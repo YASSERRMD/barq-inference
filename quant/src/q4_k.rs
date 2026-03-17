@@ -2,8 +2,8 @@
 //!
 //! More sophisticated 4-bit quantization with separate scales for min/max
 
-use barq_core::tensor::{Tensor, TensorType, Shape};
 use barq_core::error::{Error, Result};
+use barq_core::tensor::{Shape, Tensor, TensorType};
 
 /// Q4_K quantization: 4-bit with min/max scaling
 ///
@@ -18,9 +18,7 @@ pub struct Q4_K {
 
 impl Q4_K {
     pub fn new() -> Self {
-        Self {
-            block_size: 256,
-        }
+        Self { block_size: 256 }
     }
 
     pub fn quantize(&self, input: &[f32]) -> Result<Vec<u8>> {
