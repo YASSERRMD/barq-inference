@@ -1,6 +1,6 @@
 [workspace]
 members = [
-    "core",
+    "barq_core",
     "quant",
     "vocab",
     "models",
@@ -57,16 +57,9 @@ num-traits = "0.2"
 num-derive = "0.4"
 itertools = "0.13"
 
-# Platform-specific
-[target.'cfg(target_arch = "x86_64")'.dependencies]
-core_arch = "0.3"
+# Platform-specific dependencies must be defined in individual crate Cargo.toml files
 
-[target.'cfg(target_arch = "aarch64")'.dependencies]
-core_arch = "0.3"
-
-# GPU (optional)
-cudarc = { version = "0.12", optional = true }
-metal = { version = "0.28", optional = true }
+# GPU dependencies (optional) must be defined in individual crate Cargo.toml files
 
 [profile.release]
 opt-level = 3
