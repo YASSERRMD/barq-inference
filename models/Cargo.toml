@@ -19,6 +19,7 @@ tracing = { workspace = true }
 parking_lot = { workspace = true }
 itertools = { workspace = true }
 num_cpus = "1.16"
+rand = "0.8"
 
 barq_core = { path = "../barq_core" }
 vocab = { path = "../vocab" }

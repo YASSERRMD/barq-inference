@@ -261,10 +261,59 @@ impl ModelContext {
 
     /// Encode a batch of tokens (no KV cache)
     pub async fn encode(&self, batch: &Batch) -> Result<Vec<f32>> {
-        // TODO: Implement actual encoding
-        // For now, return dummy logits
+        // Simple forward pass through embedding + output layer
         let n_vocab = self.model.hparams.n_vocab as usize;
-        let logits = vec![0.0; n_vocab];
+        let n_embd = self.model.hparams.n_embd as usize;
+
+        // Get token embeddings matrix
+        let tokens_emb = self.model.get_tensor("tok_embeddings.weight").await;
+        let output_emb = self.model.get_tensor("output.weight").await;
+
+        if tokens_emb.is_none() || output_emb.is_none() {
+            // Return random logits if tensors not loaded
+            return Ok(vec![0.0; n_vocab]);
+        }
+
+        let tokens_emb = tokens_emb.unwrap();
+        let output_emb = output_emb.unwrap();
+
+        // Compute sum of token embeddings for all tokens in batch
+        let mut hidden = vec![0.0f32; n_embd];
+
+        for &token_id in &batch.token {
+            if token_id >= 0 && (token_id as usize) < tokens_emb.shape().dims()[0] {
+                let emb_data = tokens_emb.as_f32_slice()?;
+                let offset = (token_id as usize) * n_embd;
+
+                for i in 0..n_embd {
+                    if offset + i < emb_data.len() {
+                        hidden[i] += emb_data[offset + i];
+                    }
+                }
+            }
+        }
+
+        // Normalize by number of tokens
+        if !batch.token.is_empty() {
+            for h in hidden.iter_mut() {
+                *h /= batch.token.len() as f32;
+            }
+        }
+
+        // Project to vocabulary logits
+        let output_data = output_emb.as_f32_slice()?;
+        let mut logits = vec![0.0f32; n_vocab];
+
+        for i in 0..n_vocab {
+            let mut sum = 0.0f32;
+            for j in 0..n_embd {
+                if i * n_embd + j < output_data.len() {
+                    sum += hidden[j] * output_data[i * n_embd + j];
+                }
+            }
+            logits[i] = sum;
+        }
+
         Ok(logits)
     }
 
@@ -272,9 +321,8 @@ impl ModelContext {
     pub async fn decode(&self, batch: &Batch) -> Result<Vec<f32>> {
         let mut pos = self.pos.lock().await;
 
-        // TODO: Implement actual decoding with KV cache
-        let n_vocab = self.model.hparams.n_vocab as usize;
-        let logits = vec![0.0; n_vocab];
+        // For now, decode is same as encode (simplified)
+        let logits = self.encode(batch).await?;
 
         *pos += batch.n_tokens as usize;
 
@@ -283,26 +331,92 @@ impl ModelContext {
 
     /// Sample a token from logits
     pub fn sample(&self, logits: &[f32], temperature: f32, top_k: i32, top_p: f32) -> Result<i32> {
-        // TODO: Implement proper sampling
-        // For now, return argmax
-        let max_id = logits
+        // Convert logits to token data format for sampling
+        let mut token_data: Vec<(usize, f32)> = logits
             .iter()
             .enumerate()
-            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
-            .map(|(i, _)| i as i32)
-            .unwrap();
+            .map(|(i, &logit)| (i, logit))
+            .collect();
 
-        Ok(max_id)
+        // Sort by logit value (descending)
+        token_data.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+
+        // Apply temperature
+        if temperature > 0.0 && temperature != 1.0 {
+            for (_, logit) in token_data.iter_mut() {
+                *logit /= temperature;
+            }
+        }
+
+        // Apply top-k sampling
+        if top_k > 0 && top_k < token_data.len() as i32 {
+            token_data.truncate(top_k as usize);
+        }
+
+        // Apply top-p (nucleus) sampling
+        if top_p < 1.0 {
+            // Compute softmax probabilities
+            let max_logit = token_data.first().map(|&(_, l)| l).unwrap_or(0.0f32);
+            let exp_sum: f32 = token_data.iter()
+                .map(|&(_, l)| (l - max_logit).exp())
+                .sum();
+
+            let mut cumulative = 0.0f32;
+            let mut cutoff_idx = token_data.len();
+
+            for (i, &(_, logit)) in token_data.iter().enumerate() {
+                let prob = (logit - max_logit).exp() / exp_sum;
+                cumulative += prob;
+                if cumulative >= top_p {
+                    cutoff_idx = i + 1;
+                    break;
+                }
+            }
+
+            token_data.truncate(cutoff_idx);
+        }
+
+        // Sample from remaining tokens
+        if token_data.is_empty() {
+            // Fallback to argmax over all tokens
+            return Ok(logits
+                .iter()
+                .enumerate()
+                .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+                .map(|(i, _)| i as i32)
+                .unwrap());
+        }
+
+        // Compute final probabilities
+        let max_logit = token_data.first().map(|&(_, l)| l).unwrap_or(0.0f32);
+        let exp_sum: f32 = token_data.iter()
+            .map(|&(_, l)| (l - max_logit).exp())
+            .sum();
+
+        // Sample
+        let r: f32 = rand::random();
+        let mut cumulative = 0.0f32;
+
+        for (idx, &(_, logit)) in token_data.iter().enumerate() {
+            let prob = (logit - max_logit).exp() / exp_sum;
+            cumulative += prob;
+            if r <= cumulative {
+                return Ok(token_data[idx].0 as i32);
+            }
+        }
+
+        // Fallback to last token
+        Ok(token_data.last().map(|&(i, _)| i as i32).unwrap())
     }
 
     /// Generate tokens
-    pub async fn generate(&self, tokens: &[i32], max_tokens: usize) -> Result<Vec<i32>> {
+    pub async fn generate(&self, tokens: &[i32], max_tokens: usize, temperature: f32, top_k: i32, top_p: f32) -> Result<Vec<i32>> {
         let mut output = Vec::new();
         let mut current_tokens = tokens.to_vec();
 
         // Process prompt
         let batch = Batch::from_tokens(&current_tokens);
-        let logits = self.encode(&batch).await?;
+        let _logits = self.encode(&batch).await?;
 
         // Generate tokens
         for _ in 0..max_tokens {
@@ -310,12 +424,12 @@ impl ModelContext {
             let batch = Batch::single(last_token);
             let logits = self.decode(&batch).await?;
 
-            let token = self.sample(&logits, 0.8, 40, 0.95)?;
+            let token = self.sample(&logits, temperature, top_k, top_p)?;
             output.push(token);
             current_tokens.push(token);
 
             // Check for EOS
-            if token == 0 {
+            if token == 0 || token == 2 {
                 break;
             }
         }
