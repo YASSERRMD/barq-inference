@@ -9,6 +9,7 @@ pub mod spm;
 pub mod bpe;
 pub mod wpm;
 pub mod unigram;
+pub mod gguf_tokenizer;
 pub mod prelude;
 
 pub use tokenizer::{Tokenizer, TokenizerType};
@@ -17,3 +18,4 @@ pub use spm::SentencePiece;
 pub use bpe::BpeTokenizer;
 pub use wpm::WordPiece;
 pub use unigram::Unigram;
+pub use gguf_tokenizer::GgufTokenizer;

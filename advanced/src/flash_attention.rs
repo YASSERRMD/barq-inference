@@ -10,8 +10,8 @@
 //! - Recomputation: avoids storing the full attention matrix
 //! - SIMD-friendly operations for better vectorization
 
-use core::error::{Error, Result};
-use core::tensor::{Tensor, TensorType, TensorData, Shape};
+use barq_core::error::{Error, Result};
+use barq_core::tensor::{Tensor, TensorType, TensorData, Shape};
 
 /// Flash Attention-2 configuration
 #[derive(Debug, Clone)]
@@ -69,8 +69,8 @@ impl FlashAttention {
         self.validate_inputs(q, k, v)?;
 
         let shape = q.shape();
-        let batch_size = shape.dims[0];
-        let seq_len = shape.dims[1];
+        let batch_size = shape.dims()[0];
+        let seq_len = shape.dims()[1];
 
         // Extract f32 data
         let q_data = q.as_f32_slice()?;
@@ -118,7 +118,7 @@ impl FlashAttention {
         let k_shape = k.shape();
         let v_shape = v.shape();
 
-        if q_shape.dims.len() != 4 || k_shape.dims.len() != 4 || v_shape.dims.len() != 4 {
+        if q_shape.dims().len() != 4 || k_shape.dims().len() != 4 || v_shape.dims().len() != 4 {
             return Err(Error::tensor(
                 "Q, K, V must be 4D tensors [batch, seq, heads, head_dim]",
             ));
@@ -128,11 +128,11 @@ impl FlashAttention {
             return Err(Error::tensor("Q, K, V must have the same shape"));
         }
 
-        if q_shape.dims[2] != self.num_heads {
+        if q_shape.dims()[2] != self.num_heads {
             return Err(Error::tensor("Number of heads mismatch"));
         }
 
-        if q_shape.dims[3] != self.head_dim {
+        if q_shape.dims()[3] != self.head_dim {
             return Err(Error::tensor("Head dimension mismatch"));
         }
 

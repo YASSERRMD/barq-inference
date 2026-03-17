@@ -1,7 +1,7 @@
 //! Buffer management for different backends
 
-use core::error::{Error, Result};
-use core::tensor::TensorType;
+use barq_core::error::{Error, Result};
+use barq_core::tensor::TensorType;
 
 /// Buffer type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -38,6 +38,9 @@ pub trait Buffer: Send + Sync {
 
     /// Clone the buffer
     fn clone_box(&self) -> Box<dyn Buffer>;
+
+    /// Cast to Any for downcasting
+    fn as_any(&self) -> &dyn std::any::Any;
 }
 
 impl Clone for Box<dyn Buffer> {
@@ -73,6 +76,14 @@ impl CpuBuffer {
             dtype,
             data,
         })
+    }
+
+    pub fn data_mut(&mut self) -> &mut [u8] {
+        &mut self.data
+    }
+
+    pub fn data(&self) -> &[u8] {
+        &self.data
     }
 }
 
@@ -124,10 +135,8 @@ impl Buffer for CpuBuffer {
             data: self.data.clone(),
         })
     }
-}
 
-impl CpuBuffer {
-    pub fn as_any(&self) -> &dyn std::any::Any {
+    fn as_any(&self) -> &dyn std::any::Any {
         self
     }
 }
@@ -179,6 +188,10 @@ impl Buffer for GpuBuffer {
             size: self.size,
             device_id: self.device_id,
         })
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
 }
 

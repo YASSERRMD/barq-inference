@@ -21,7 +21,7 @@ use tokio::sync::Semaphore;
 use crate::context::{ModelContext, ContextParams};
 use crate::loader::Model;
 use crate::kv_cache::AdvancedKVCache;
-use core::error::{Error, Result};
+use barq_core::error::{Error, Result};
 
 /// Speculative decoding configuration
 #[derive(Debug, Clone)]
