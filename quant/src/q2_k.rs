@@ -268,3 +268,51 @@ impl Default for Q2K {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_q2_k_block_size() {
+        let q = Q2K::new();
+        assert_eq!(q.block_size, QK_K);
+    }
+
+    #[test]
+    fn test_q2_k_size() {
+        assert_eq!(BlockQ2K::size_bytes(), 84);
+    }
+
+    #[test]
+    fn test_q2_k_roundtrip() {
+        let quant = Q2K::new();
+
+        let input: Vec<f32> = (0..256).map(|i| (i as f32 - 128.0) / 100.0).collect();
+        let quantized = quant.quantize(&input).unwrap();
+        let dequantized = quant.dequantize(&quantized, input.len()).unwrap();
+
+        assert_eq!(dequantized.len(), input.len());
+
+        for (i, (&orig, &deq)) in input.iter().zip(dequantized.iter()).enumerate() {
+            let error = (orig - deq).abs();
+            assert!(
+                error < 0.5,
+                "Error at index {}: {} vs {} (error={})",
+                i,
+                orig,
+                deq,
+                error
+            );
+        }
+    }
+
+    #[test]
+    fn test_f16_conversion() {
+        for f in [0.0, 1.0, -1.0, 2.0, 0.5, 100.0, -50.0] {
+            let h = f32_to_f16(f);
+            let back = f16_to_f32(h);
+            assert!((f - back).abs() < 0.001, "Failed for {}", f);
+        }
+    }
+}
