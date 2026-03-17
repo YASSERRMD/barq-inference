@@ -144,9 +144,12 @@ impl BlockQ3K {
 fn get_scale_q3k(j: usize, scales: &[u8]) -> f32 {
     if j < 4 {
         (scales[j] & 0x3F) as f32
-    } else {
+    } else if j < 12 {
         let tmp = scales[j - 4];
         ((tmp & 0x0F) | ((scales[j] & 0x0F) << 4)) as f32
+    } else {
+        // j >= 12: wrap around to reuse scales from blocks 0-3
+        (scales[j % 4] & 0x3F) as f32
     }
 }
 

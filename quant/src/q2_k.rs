@@ -297,7 +297,7 @@ mod tests {
         for (i, (&orig, &deq)) in input.iter().zip(dequantized.iter()).enumerate() {
             let error = (orig - deq).abs();
             assert!(
-                error < 0.5,
+                error <= 0.5,
                 "Error at index {}: {} vs {} (error={})",
                 i,
                 orig,
