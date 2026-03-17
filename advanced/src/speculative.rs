@@ -13,6 +13,41 @@
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 
+/// Speculative decoding trait defining verification logic
+pub trait SpeculativeDecoding: Send + Sync {
+    /// Verifies draft tokens against target distribution.
+    /// Returns the number of successfully matched tokens (0 to draft_tokens.len()).
+    fn verify(&self, draft_tokens: &[i32], target_probs: &[f32]) -> usize;
+}
+
+/// A mock implementation of SpeculativeDecoding for testing the scaffold
+pub struct MockSpeculativeDecoder {
+    /// Fixed probability of accepting each token
+    pub acceptance_rate: f32,
+}
+
+impl MockSpeculativeDecoder {
+    pub fn new(acceptance_rate: f32) -> Self {
+        Self { acceptance_rate }
+    }
+}
+
+impl SpeculativeDecoding for MockSpeculativeDecoder {
+    fn verify(&self, draft_tokens: &[i32], _target_probs: &[f32]) -> usize {
+        let mut accepted = 0;
+        for _ in draft_tokens {
+            let r: f32 = rand::random();
+            if r <= self.acceptance_rate {
+                accepted += 1;
+            } else {
+                break;
+            }
+        }
+        accepted
+    }
+}
+
+
 use barq_core::error::{Error, Result};
 use barq_core::tensor::{Tensor, TensorType, TensorData, Shape};
 
@@ -76,8 +111,8 @@ impl SpeculativeStats {
     }
 }
 
-/// Speculative decoding engine
-pub struct SpeculativeDecoding {
+/// Speculative decoding engine (orchestrator)
+pub struct SpeculativeEngine {
     /// Configuration
     config: SpeculativeConfig,
     /// Vocabulary size
@@ -88,7 +123,7 @@ pub struct SpeculativeDecoding {
     stats: SpeculativeStats,
 }
 
-impl SpeculativeDecoding {
+impl SpeculativeEngine {
     /// Create a new speculative decoding engine
     pub fn new(vocab_size: usize, config: SpeculativeConfig) -> Self {
         let semaphore = Arc::new(Semaphore::new(1));
@@ -352,7 +387,7 @@ mod tests {
 
     #[test]
     fn test_speculative_creation() {
-        let sd = SpeculativeDecoding::new(32000, SpeculativeConfig::default());
+        let sd = SpeculativeEngine::new(32000, SpeculativeConfig::default());
         assert_eq!(sd.vocab_size, 32000);
     }
 
@@ -365,7 +400,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_speculative_generate() {
-        let mut sd = SpeculativeDecoding::new(100, SpeculativeConfig::default());
+        let mut sd = SpeculativeEngine::new(100, SpeculativeConfig::default());
 
         // Mock draft model: always returns token 1
         let draft_fn = |context: &[i32]| -> Result<(i32, Vec<f32>)> {
