@@ -76,4 +76,148 @@ impl BlockQ5K {
             }
         }
     }
+
+    pub fn quantize(data: &[f32; QK_K]) -> Self {
+        let mut scales = [0u8; QK_K / 16];
+        let mut qs = [0u8; QK_K * 5 / 8];
+        let mut dh = [0u8; 4];
+        let mut max_d = 0.0f32;
+        let mut max_m = 0.0f32;
+
+        for block_idx in 0..8 {
+            let start = block_idx * 32;
+            let block = &data[start..start + 32];
+
+            let mut max_val = f32::NEG_INFINITY;
+            let mut min_val = f32::INFINITY;
+            for &v in block {
+                max_val = max_val.max(v);
+                min_val = min_val.min(v);
+            }
+
+            let range = max_val - min_val;
+            let scale = if range > 0.0 { range / 31.0 } else { 0.0 };
+
+            let sc_quant = if scale > 0.0 {
+                (scale / max_d * 255.0).min(255.0) as u8
+            } else {
+                0
+            };
+
+            let m_quant = if min_val < 0.0 {
+                ((-min_val) / max_m * 255.0).min(255.0) as u8
+            } else {
+                0
+            };
+
+            scales[block_idx] = sc_quant;
+            scales[block_idx + 8] = m_quant;
+
+            max_d = max_d.max(scale);
+            max_m = max_m.max(min_val.abs());
+
+            // Quantize values
+            for i in 0..32 {
+                let val = block[i];
+                let normalized = if range > 0.0 {
+                    ((val - min_val) / range * 31.0).round().min(31.0).max(0.0) as u32
+                } else {
+                    0
+                };
+
+                let ql = (normalized & 0xFF) as u8;
+                let qh = ((normalized >> 8) & 0x03) as u8;
+
+                let qs_idx = (block_idx * 20) + (i / 8) * 5 + (i % 8);
+                if qs_idx < qs.len() {
+                    qs[qs_idx] = ql;
+                }
+
+                // Each dh byte stores 4 high bits (for 4 values)
+                // dh[block_idx * 2] stores bits for values 0-3, 8-11, 16-19, 24-27
+                // dh[block_idx * 2 + 1] stores bits for values 4-7, 12-15, 20-23, 28-31
+                let sub_i = i % 16;
+                let dh_byte_idx = block_idx * 2 + (sub_i / 8);
+                let dh_bit_pos = ((sub_i % 8) / 4) * 2;
+                if dh_byte_idx < dh.len() {
+                    dh[dh_byte_idx] |= qh << dh_bit_pos;
+                }
+            }
+        }
+
+        let d = f32_to_f16(max_d / 255.0);
+        let dmin = f32_to_f16(max_m / 255.0);
+
+        BlockQ5K {
+            scales,
+            qs,
+            d,
+            dmin,
+            dh,
+        }
+    }
+}
+
+#[inline]
+fn f16_to_f32(h: u16) -> f32 {
+    let sign = ((h >> 15) & 1) as i32;
+    let exponent = ((h >> 10) & 0x1F) as i32;
+    let mantissa = (h & 0x3FF) as i32;
+
+    if exponent == 0 {
+        if mantissa == 0 {
+            return if sign != 0 { -0.0 } else { 0.0 };
+        } else {
+            let m = mantissa as f32 / 1024.0;
+            return if sign != 0 {
+                -m * 2.0_f32.powi(-14)
+            } else {
+                m * 2.0_f32.powi(-14)
+            };
+        }
+    } else if exponent == 31 {
+        return if sign != 0 {
+            f32::NEG_INFINITY
+        } else {
+            f32::INFINITY
+        };
+    }
+
+    let e = exponent - 15;
+    let m = 1.0 + mantissa as f32 / 1024.0;
+
+    if sign != 0 {
+        -m * 2.0_f32.powi(e)
+    } else {
+        m * 2.0_f32.powi(e)
+    }
+}
+
+#[inline]
+fn f32_to_f16(f: f32) -> u16 {
+    let bits = f.to_bits();
+    let sign = (bits >> 31) & 1;
+    let exponent = ((bits >> 23) & 0xFF) as i32 - 127;
+    let mantissa = bits & 0x7FFFFF;
+
+    if f == 0.0 {
+        return if sign != 0 { 0x8000 } else { 0 };
+    }
+
+    if exponent >= 16 {
+        return if sign != 0 { 0xFC00 } else { 0x7C00 };
+    }
+
+    if exponent <= -15 {
+        let e = exponent + 24;
+        let m = (mantissa | 0x800000) as f32 / 8388608.0;
+        let subnormal = (m * 2.0_f32.powi(e)) * 1024.0;
+        let m = subnormal as u32;
+        return ((sign << 15) | m) as u16;
+    }
+
+    let sign = (sign as u16) << 15;
+    let e = ((exponent + 15) as u16) << 10;
+    let m = (mantissa >> 13) as u16;
+    sign | e | m
 }
