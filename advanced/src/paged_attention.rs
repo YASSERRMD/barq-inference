@@ -132,27 +132,79 @@ impl PagedAttention {
         self.block_size
     }
 
-    /// Defragment memory pages by compacting sparse allocations
+    /// Defragment memory pages by compacting sparse allocations.
     ///
-    /// In long-running servers, sequences allocating and freeing can fragment the
-    /// physical mapped page arrays. This function simulates compaction by moving
-    /// valid data forward to contiguous free blocks and updating sequence maps.
+    /// Scans the page pool and relocates active pages into the lowest available
+    /// physical slots, then rebuilds the free list as a contiguous high range.
+    /// Updates all `sequence_pages` maps to point to the new physical locations.
+    ///
+    /// Returns the number of pages actually relocated.
     pub async fn defrag(&self) -> Result<usize> {
         let mut sequence_pages = self.sequence_pages.lock().await;
         let mut free_pages = self.free_pages.lock().await;
         let mut pages = self.pages.lock().await;
-        
-        // This is a zero-copy logic scaffold for physical memory defragmentation.
-        // In a real VRAM context, you would cudaMemcpy2D buffer chunks backwards 
-        // to fill holes, then update indexing maps.
-        
+
+        // Build a set of currently used page IDs
+        let used: std::collections::HashSet<usize> = sequence_pages
+            .values()
+            .flat_map(|v| v.iter().copied())
+            .collect();
+
+        // Gather free slots in sorted order (lowest first)
+        let mut free_slots: Vec<usize> = (0..self.max_pages)
+            .filter(|id| !used.contains(id))
+            .collect();
+
+        // Gather used slots sorted descending (move high IDs into low slots)
+        let mut used_high: Vec<usize> = used.iter()
+            .copied()
+            .filter(|id| free_slots.first().map(|f| id > f).unwrap_or(false))
+            .collect();
+        used_high.sort_unstable_by(|a, b| b.cmp(a)); // descending
+
+        // Map old_id -> new_id for relocated pages
+        let mut remap: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
         let mut pages_moved = 0;
-        let initial_free = free_pages.len();
-        
-        // Re-sort free list to prevent fragmentation drift
+
+        for old_id in used_high {
+            if let Some(&new_id) = free_slots.first() {
+                if new_id < old_id {
+                    // Extract data from old page before any other mut borrows
+                    let old_ref_count = pages[old_id].as_ref().map(|p| p.ref_count).unwrap_or(0);
+                    let old_data = pages[old_id].as_mut().map(|p| p.data.take()).flatten();
+
+                    if let Some(data) = old_data {
+                        if let Some(Some(new_page)) = pages.get_mut(new_id) {
+                            new_page.data = Some(data);
+                            new_page.ref_count = old_ref_count;
+                        }
+                        // Clear old page
+                        if let Some(Some(old_page)) = pages.get_mut(old_id) {
+                            old_page.data = None;
+                            old_page.ref_count = 0;
+                        }
+                    }
+                    remap.insert(old_id, new_id);
+                    free_slots.remove(0);
+                    free_slots.push(old_id);
+                    pages_moved += 1;
+                }
+            }
+        }
+
+        // Update sequence maps
+        for page_ids in sequence_pages.values_mut() {
+            for id in page_ids.iter_mut() {
+                if let Some(&new_id) = remap.get(id) {
+                    *id = new_id;
+                }
+            }
+        }
+
+        // Rebuild free list in sorted order
+        *free_pages = free_slots;
         free_pages.sort_unstable();
-        
-        // Ensure defrag returns the number of pages successfully packed
+
         Ok(pages_moved)
     }
 }
