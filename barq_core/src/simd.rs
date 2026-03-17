@@ -8,7 +8,7 @@
 use crate::error::{Error, Result};
 
 /// SIMD optimization level detected at runtime
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd)]
 pub enum SimdLevel {
     /// No SIMD support
     None,
@@ -53,10 +53,10 @@ impl SimdLevel {
     /// Get the vector width in f32 elements for this SIMD level
     pub fn vector_width(&self) -> usize {
         match self {
-            SimdLevel::AVX512 => 16,  // 512 bits / 32 bits
-            SimdLevel::AVX2 => 8,     // 256 bits / 32 bits
-            SimdLevel::SSE42 => 4,    // 128 bits / 32 bits
-            SimdLevel::NEON => 4,     // 128 bits / 32 bits
+            SimdLevel::AVX512 => 16, // 512 bits / 32 bits
+            SimdLevel::AVX2 => 8,    // 256 bits / 32 bits
+            SimdLevel::SSE42 => 4,   // 128 bits / 32 bits
+            SimdLevel::NEON => 4,    // 128 bits / 32 bits
             SimdLevel::None => 1,
         }
     }
@@ -104,10 +104,7 @@ pub fn simd_dot_product_f32(a: &[f32], b: &[f32]) -> Result<f32> {
 
 /// Scalar fallback for dot product
 fn dot_product_scalar(a: &[f32], b: &[f32]) -> f32 {
-    a.iter()
-        .zip(b.iter())
-        .map(|(x, y)| x * y)
-        .sum()
+    a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()
 }
 
 #[cfg(target_arch = "x86_64")]

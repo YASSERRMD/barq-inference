@@ -1,11 +1,11 @@
 //! Barq - High-performance LLM inference engine CLI
 
-mod performance;
 mod benchmark;
+mod performance;
 
-use std::path::PathBuf;
 use clap::{Parser, Subcommand};
-use tracing::{info, error, Level};
+use std::path::PathBuf;
+use tracing::{error, info, Level};
 
 #[derive(Parser)]
 #[command(name = "barq")]
@@ -24,7 +24,6 @@ struct Cli {
     threads: usize,
 
     // === Performance Optimizations ===
-
     /// Enable CUDA Graphs (7-20% TPS gain on NVIDIA GPUs)
     #[arg(long, global = true)]
     cuda_graphs: bool,
@@ -75,7 +74,6 @@ enum Commands {
         context_size: usize,
 
         // === Speculative Decoding Options ===
-
         /// Enable speculative decoding
         #[arg(long)]
         speculative: bool,
@@ -195,7 +193,10 @@ async fn main() -> anyhow::Result<()> {
                 PerformancePreset::GPU
             }
             _ => {
-                eprintln!("Unknown preset: {}. Available: max-speed, balanced, max-quality, cpu, gpu", preset_str);
+                eprintln!(
+                    "Unknown preset: {}. Available: max-speed, balanced, max-quality, cpu, gpu",
+                    preset_str
+                );
                 std::process::exit(1);
             }
         };
@@ -214,12 +215,17 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Initialize logging
-    let log_level = if cli.verbose { Level::DEBUG } else { Level::INFO };
-    tracing_subscriber::fmt()
-        .with_max_level(log_level)
-        .init();
+    let log_level = if cli.verbose {
+        Level::DEBUG
+    } else {
+        Level::INFO
+    };
+    tracing_subscriber::fmt().with_max_level(log_level).init();
 
-    info!("Barq v{} - High-performance LLM inference engine", env!("CARGO_PKG_VERSION"));
+    info!(
+        "Barq v{} - High-performance LLM inference engine",
+        env!("CARGO_PKG_VERSION")
+    );
 
     // Log performance settings
     if performance::cuda_graphs_enabled() {
@@ -256,46 +262,33 @@ async fn main() -> anyhow::Result<()> {
                 speculative,
                 draft_max,
                 speculation_preset,
-            ).await
+            )
+            .await
         }
 
         Commands::Chat {
             model,
             system_prompt,
             context_size,
-        } => {
-            cmd_chat(model, system_prompt, context_size).await
-        }
+        } => cmd_chat(model, system_prompt, context_size).await,
 
         Commands::Benchmark {
             model,
             iterations,
             prompt_length,
             gen_length,
-        } => {
-            cmd_benchmark(model, iterations, prompt_length, gen_length).await
-        }
+        } => cmd_benchmark(model, iterations, prompt_length, gen_length).await,
 
-        Commands::Info { model } => {
-            cmd_info(model).await
-        }
+        Commands::Info { model } => cmd_info(model).await,
 
         Commands::Convert {
             input,
             output,
             quantize,
             output_type,
-        } => {
-            cmd_convert(input, output, quantize, output_type).await
-        }
+        } => cmd_convert(input, output, quantize, output_type).await,
 
-        Commands::Server {
-            model,
-            host,
-            port,
-        } => {
-            cmd_server(model, host, port).await
-        }
+        Commands::Server { model, host, port } => cmd_server(model, host, port).await,
     }
 }
 
@@ -312,9 +305,13 @@ async fn cmd_run(
     draft_max: usize,
     speculation_preset: Option<String>,
 ) -> anyhow::Result<()> {
-    use models::{loader::Model, context::{ContextParams, ModelContext}, llama::LlamaModel};
-    use vocab::{GgufTokenizer, Tokenizer};
+    use models::{
+        context::{ContextParams, ModelContext},
+        llama::LlamaModel,
+        loader::Model,
+    };
     use std::sync::Arc;
+    use vocab::{GgufTokenizer, Tokenizer};
 
     info!("Loading model: {:?}", model);
     info!("Prompt: {}", prompt);
@@ -333,7 +330,11 @@ async fn cmd_run(
 
     // Tokenize prompt
     let tokenization_result = tokenizer.tokenize(&prompt, true).await?;
-    let prompt_tokens: Vec<i32> = tokenization_result.ids.iter().map(|&id| id as i32).collect();
+    let prompt_tokens: Vec<i32> = tokenization_result
+        .ids
+        .iter()
+        .map(|&id| id as i32)
+        .collect();
 
     info!("Prompt tokens: {}", prompt_tokens.len());
 
@@ -352,19 +353,17 @@ async fn cmd_run(
     info!("Generating {} tokens...", max_tokens);
     let start = std::time::Instant::now();
 
-    let generated_tokens = context.generate(
-        &prompt_tokens,
-        max_tokens,
-        temperature,
-        top_k,
-        top_p
-    ).await?;
+    let generated_tokens = context
+        .generate(&prompt_tokens, max_tokens, temperature, top_k, top_p)
+        .await?;
 
     let elapsed = start.elapsed();
-    info!("Generated {} tokens in {:.2}s ({:.2} tokens/s)",
-          generated_tokens.len(),
-          elapsed.as_secs_f64(),
-          generated_tokens.len() as f64 / elapsed.as_secs_f64());
+    info!(
+        "Generated {} tokens in {:.2}s ({:.2} tokens/s)",
+        generated_tokens.len(),
+        elapsed.as_secs_f64(),
+        generated_tokens.len() as f64 / elapsed.as_secs_f64()
+    );
 
     // Decode output
     let generated_ids: Vec<u32> = generated_tokens.iter().map(|&id| id as u32).collect();
@@ -375,7 +374,10 @@ async fn cmd_run(
     println!("\n=== Stats ===");
     println!("Tokens generated: {}", generated_tokens.len());
     println!("Time: {:.2}s", elapsed.as_secs_f64());
-    println!("Speed: {:.2} tokens/s", generated_tokens.len() as f64 / elapsed.as_secs_f64());
+    println!(
+        "Speed: {:.2} tokens/s",
+        generated_tokens.len() as f64 / elapsed.as_secs_f64()
+    );
 
     Ok(())
 }

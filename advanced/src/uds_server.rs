@@ -3,12 +3,12 @@
 //! Replaces HTTP with UDS for lower latency in local deployments.
 //! Eliminates TCP overhead for agentic loops and local inference.
 
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{mpsc, oneshot, Semaphore};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use serde::{Deserialize, Serialize};
 
 use barq_core::error::{Error, Result};
 
@@ -88,7 +88,10 @@ impl InferenceServer {
         let listener = UnixListener::bind(&self.config.socket_path)
             .map_err(|e| Error::Backend(format!("Failed to bind UDS: {}", e)))?;
 
-        println!("Inference server listening on: {:?}", self.config.socket_path);
+        println!(
+            "Inference server listening on: {:?}",
+            self.config.socket_path
+        );
 
         let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
         self.shutdown_tx = Some(shutdown_tx);
@@ -127,10 +130,7 @@ impl InferenceServer {
     }
 
     /// Handle client connection
-    async fn handle_connection(
-        mut stream: UnixStream,
-        request_tx: mpsc::Sender<InferenceTask>,
-    ) {
+    async fn handle_connection(mut stream: UnixStream, request_tx: mpsc::Sender<InferenceTask>) {
         let mut buffer = vec![0u8; 8192];
 
         loop {
@@ -228,7 +228,10 @@ impl InferenceServer {
     /// Request processor (runs on blocking thread pool)
     async fn request_processor(mut rx: mpsc::Receiver<InferenceTask>) {
         while let Some(task) = rx.recv().await {
-            let InferenceTask { request, response_tx } = task;
+            let InferenceTask {
+                request,
+                response_tx,
+            } = task;
 
             tokio::task::spawn_blocking(move || {
                 let start = std::time::Instant::now();
@@ -265,10 +268,13 @@ impl InferenceServer {
             response_tx,
         };
 
-        self.request_tx.send(task).await
+        self.request_tx
+            .send(task)
+            .await
             .map_err(|_| Error::Backend("Request queue full".to_string()))?;
 
-        response_rx.await
+        response_rx
+            .await
             .map_err(|_| Error::Backend("Request cancelled".to_string()))?
     }
 }
@@ -296,23 +302,31 @@ impl InferenceClient {
 
         // Send length
         let len = (req_bytes.len() as u32).to_be_bytes();
-        stream.write_all(&len).await
+        stream
+            .write_all(&len)
+            .await
             .map_err(|e| Error::Backend(format!("Write error: {}", e)))?;
 
         // Send data
-        stream.write_all(&req_bytes).await
+        stream
+            .write_all(&req_bytes)
+            .await
             .map_err(|e| Error::Backend(format!("Write error: {}", e)))?;
 
         // Read response length
         let mut len_buf = [0u8; 4];
-        stream.read_exact(&mut len_buf).await
+        stream
+            .read_exact(&mut len_buf)
+            .await
             .map_err(|e| Error::Backend(format!("Read error: {}", e)))?;
 
         let resp_len = u32::from_be_bytes(len_buf) as usize;
 
         // Read response data
         let mut buffer = vec![0u8; resp_len];
-        stream.read_exact(&mut buffer).await
+        stream
+            .read_exact(&mut buffer)
+            .await
             .map_err(|e| Error::Backend(format!("Read error: {}", e)))?;
 
         // Deserialize response

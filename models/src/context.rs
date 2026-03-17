@@ -6,10 +6,10 @@ use std::sync::Arc;
 
 use tokio::sync::Mutex;
 
-use crate::loader::Model;
 use crate::arch::LlmArch;
-use barq_core::tensor::{Tensor, TensorType, Shape};
+use crate::loader::Model;
 use barq_core::error::{Error, Result};
+use barq_core::tensor::{Shape, Tensor, TensorType};
 
 /// Inference context parameters
 #[derive(Debug, Clone)]
@@ -32,7 +32,6 @@ pub struct ContextParams {
     pub embeddings: bool,
 
     // === Performance Optimizations ===
-
     /// Enable Flash Attention (reduces memory bandwidth, ~30% faster)
     pub flash_attn: bool,
     /// Number of GPU layers to offload (9999 = all layers)
@@ -52,9 +51,9 @@ impl Default for ContextParams {
     fn default() -> Self {
         Self {
             // Standard parameters
-            n_ctx: 8192,              // Larger context safe with Flash Attention
+            n_ctx: 8192, // Larger context safe with Flash Attention
             n_batch: 512,
-            n_threads: 4,             // Optimized for GPU inference
+            n_threads: 4, // Optimized for GPU inference
             n_threads_batch: 4,
             rope_scaling_type: 0,
             rope_freq_base: 0.0,
@@ -62,13 +61,13 @@ impl Default for ContextParams {
             embeddings: false,
 
             // Performance optimizations (Phase 1: Zero-Cost Flag Wins)
-            flash_attn: true,         // ~30% faster speculative decoding
-            n_gpu_layers: 9999,       // Offload all layers to GPU
-            type_k: 1,                // GGML_TYPE_Q8_0 (50% VRAM savings)
-            type_v: 1,                // GGML_TYPE_Q8_0
-            defrag_thold: 0.1,        // Defrag at 10% fragmentation
-            n_ubatch: 512,            // Match n_batch for Flash Attention
-            n_seq_max: 32,            // Support continuous batching
+            flash_attn: true,   // ~30% faster speculative decoding
+            n_gpu_layers: 9999, // Offload all layers to GPU
+            type_k: 1,          // GGML_TYPE_Q8_0 (50% VRAM savings)
+            type_v: 1,          // GGML_TYPE_Q8_0
+            defrag_thold: 0.1,  // Defrag at 10% fragmentation
+            n_ubatch: 512,      // Match n_batch for Flash Attention
+            n_seq_max: 32,      // Support continuous batching
         }
     }
 }
@@ -77,11 +76,11 @@ impl ContextParams {
     /// Create optimized parameters for GPU inference
     pub fn gpu_optimized() -> Self {
         Self {
-            n_threads: 4,             // CPU is bottleneck, not compute
+            n_threads: 4, // CPU is bottleneck, not compute
             n_threads_batch: 4,
             flash_attn: true,
             n_gpu_layers: 9999,
-            type_k: 1,                // Q8_0
+            type_k: 1, // Q8_0
             type_v: 1,
             n_ctx: 8192,
             ..Default::default()
@@ -93,7 +92,7 @@ impl ContextParams {
         Self {
             n_threads: num_cpus::get_physical() as u32,
             n_threads_batch: num_cpus::get_physical() as u32,
-            flash_attn: false,        // CPU Flash Attention less beneficial
+            flash_attn: false, // CPU Flash Attention less beneficial
             n_gpu_layers: 0,
             type_k: 1,
             type_v: 1,
@@ -104,7 +103,7 @@ impl ContextParams {
     /// Create parameters for maximum quality (Q8_0 quantization)
     pub fn quality() -> Self {
         Self {
-            type_k: 1,                // Q8_0
+            type_k: 1, // Q8_0
             type_v: 1,
             flash_attn: true,
             ..Default::default()
@@ -114,11 +113,11 @@ impl ContextParams {
     /// Create parameters for maximum speed (IQ4_XS quantization)
     pub fn speed() -> Self {
         Self {
-            type_k: 0,                // Q4_0 for even more compression
+            type_k: 0, // Q4_0 for even more compression
             type_v: 0,
             flash_attn: true,
             n_gpu_layers: 9999,
-            n_ctx: 4096,              // Smaller context for speed
+            n_ctx: 4096, // Smaller context for speed
             ..Default::default()
         }
     }
@@ -329,9 +328,7 @@ impl ModelContext {
         if top_p < 1.0 {
             // Compute softmax probabilities
             let max_logit = token_data.first().map(|&(_, l)| l).unwrap_or(0.0f32);
-            let exp_sum: f32 = token_data.iter()
-                .map(|&(_, l)| (l - max_logit).exp())
-                .sum();
+            let exp_sum: f32 = token_data.iter().map(|&(_, l)| (l - max_logit).exp()).sum();
 
             let mut cumulative = 0.0f32;
             let mut cutoff_idx = token_data.len();
@@ -361,9 +358,7 @@ impl ModelContext {
 
         // Compute final probabilities
         let max_logit = token_data.first().map(|&(_, l)| l).unwrap_or(0.0f32);
-        let exp_sum: f32 = token_data.iter()
-            .map(|&(_, l)| (l - max_logit).exp())
-            .sum();
+        let exp_sum: f32 = token_data.iter().map(|&(_, l)| (l - max_logit).exp()).sum();
 
         // Sample
         let r: f32 = rand::random();
@@ -382,7 +377,14 @@ impl ModelContext {
     }
 
     /// Generate tokens
-    pub async fn generate(&self, tokens: &[i32], max_tokens: usize, temperature: f32, top_k: i32, top_p: f32) -> Result<Vec<i32>> {
+    pub async fn generate(
+        &self,
+        tokens: &[i32],
+        max_tokens: usize,
+        temperature: f32,
+        top_k: i32,
+        top_p: f32,
+    ) -> Result<Vec<i32>> {
         let mut output = Vec::new();
         let mut current_tokens = tokens.to_vec();
 

@@ -8,27 +8,30 @@
 #![warn(clippy::all)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
-pub mod error;
-pub mod tensor;
+pub mod attention;
 pub mod context;
+pub mod error;
+pub mod gemm;
+pub mod gguf;
 pub mod memory;
+pub mod normalization;
 pub mod ops;
 pub mod ops_ref;
-pub mod gguf;
+pub mod platform;
+pub mod prelude;
 pub mod quant;
-pub mod softmax;
-pub mod normalization;
-pub mod attention;
 pub mod rope;
 pub mod simd;
 pub mod simd_softmax;
-pub mod gemm;
-pub mod platform;
-pub mod prelude;
+pub mod softmax;
+pub mod tensor;
 
-pub use error::{Error, Result};
-pub use tensor::{Tensor, TensorType, TensorData};
 pub use context::Context;
-pub use memory::{MemoryType, MemoryBuffer, Allocator};
-pub use quant::{QuantizationType, Quantize, Dequantize};
-pub use platform::{PlatformType, SIMDCapabilities, DeviceInfo, detect_platform, detect_simd, get_device_info, print_platform_info};
+pub use error::{Error, Result};
+pub use memory::{Allocator, MemoryBuffer, MemoryType};
+pub use platform::{
+    detect_platform, detect_simd, get_device_info, print_platform_info, DeviceInfo, PlatformType,
+    SIMDCapabilities,
+};
+pub use quant::{Dequantize, QuantizationType, Quantize};
+pub use tensor::{Tensor, TensorData, TensorType};

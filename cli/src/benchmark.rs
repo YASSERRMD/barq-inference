@@ -6,8 +6,8 @@
 //! - Memory usage (VRAM/RAM)
 //! - KV cache hit rate
 
-use std::time::{Duration, Instant};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
 /// Benchmark result metrics
 #[derive(Debug, Clone)]
@@ -186,7 +186,8 @@ impl InferenceBenchmark {
             let variance = tps_samples
                 .iter()
                 .map(|&x| (x - mean_tps).powi(2))
-                .sum::<f64>() / tps_samples.len() as f64;
+                .sum::<f64>()
+                / tps_samples.len() as f64;
             variance.sqrt()
         };
 
@@ -335,8 +336,10 @@ impl InferenceMetrics {
 
     pub fn record_request(&self, prompt_tokens: usize, generated_tokens: usize) {
         self.total_requests.fetch_add(1, Ordering::Relaxed);
-        self.total_prompt_tokens.fetch_add(prompt_tokens as u64, Ordering::Relaxed);
-        self.total_tokens_generated.fetch_add(generated_tokens as u64, Ordering::Relaxed);
+        self.total_prompt_tokens
+            .fetch_add(prompt_tokens as u64, Ordering::Relaxed);
+        self.total_tokens_generated
+            .fetch_add(generated_tokens as u64, Ordering::Relaxed);
     }
 
     pub fn record_failure(&self) {

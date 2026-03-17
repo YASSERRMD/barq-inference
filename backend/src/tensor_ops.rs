@@ -1,8 +1,8 @@
 //! Tensor operations abstraction
 
-use barq_core::tensor::{Tensor, TensorType, Shape};
 use barq_core::error::{Error, Result};
-use barq_core::ops::{UnaryOp, BinaryOp};
+use barq_core::ops::{BinaryOp, UnaryOp};
+use barq_core::tensor::{Shape, Tensor, TensorType};
 
 /// Tensor operation type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -98,15 +98,21 @@ impl TensorOps for CpuTensorOps {
     }
 
     fn softmax(&self, _x: &Tensor, _dim: usize) -> Result<Tensor> {
-        Err(Error::Unsupported("Softmax not yet implemented".to_string()))
+        Err(Error::Unsupported(
+            "Softmax not yet implemented".to_string(),
+        ))
     }
 
     fn layer_norm(&self, _x: &Tensor, _dim: usize) -> Result<Tensor> {
-        Err(Error::Unsupported("Layer norm not yet implemented".to_string()))
+        Err(Error::Unsupported(
+            "Layer norm not yet implemented".to_string(),
+        ))
     }
 
     fn rms_norm(&self, _x: &Tensor, _dim: usize) -> Result<Tensor> {
-        Err(Error::Unsupported("RMS norm not yet implemented".to_string()))
+        Err(Error::Unsupported(
+            "RMS norm not yet implemented".to_string(),
+        ))
     }
 }
 
@@ -124,7 +130,8 @@ mod tests {
             TensorType::F32,
             Shape::matrix(2, 2),
             TensorData::F32(vec![1.0, 2.0, 3.0, 4.0]),
-        ).unwrap();
+        )
+        .unwrap();
 
         let result = ops.relu(&a);
         assert!(result.is_ok());

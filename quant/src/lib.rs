@@ -3,9 +3,9 @@
 //! This module provides implementations for various quantization schemes
 //! used to compress LLM weights while maintaining accuracy.
 
+pub mod iq;
 pub mod q4_0;
 pub mod q4_k;
-pub mod iq;
 pub mod simd_quant;
 // pub mod ik_quant;  // TODO: Implement
 // pub mod blockwise;  // TODO: Implement
