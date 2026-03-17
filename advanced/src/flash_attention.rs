@@ -118,7 +118,7 @@ impl FlashAttention {
         let k_shape = k.shape();
         let v_shape = v.shape();
 
-        if q_shape.dims.len() != 4 || k_shape.dims.len() != 4 || v_shape.dims.len() != 4 {
+        if q_shape.dims().len() != 4 || k_shape.dims().len() != 4 || v_shape.dims().len() != 4 {
             return Err(Error::tensor(
                 "Q, K, V must be 4D tensors [batch, seq, heads, head_dim]",
             ));
