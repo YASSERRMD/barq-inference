@@ -313,6 +313,7 @@ mod tests {
 
         for (i, (&orig, &deq)) in input.iter().zip(dequantized.iter()).enumerate() {
             let error = (orig - deq).abs();
+            // TODO: Fix Q2_K quantization/dequantization logic - currently has errors up to 2.56
             assert!(
                 error <= 2.6,
                 "Error at index {}: {} vs {} (error={})",
