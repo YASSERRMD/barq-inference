@@ -400,7 +400,7 @@ async fn cmd_benchmark(
         measure_memory: true,
     };
 
-    let bench = InferenceBenchmark::with_config(config);
+    let bench = InferenceBenchmark::with_config(config.clone());
 
     // TODO: Implement actual inference function
     // For now, use a mock that simulates inference

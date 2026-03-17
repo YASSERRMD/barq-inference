@@ -127,8 +127,11 @@ impl SpeculativeDecoding {
         F: FnMut(&[i32]) -> Result<(i32, Vec<f32>)> + Send + 'static,
         G: FnMut(&[i32]) -> Result<Vec<i32>> + Send + 'static,
     {
-        let _permit = self.semaphore.acquire().await
-            .map_err(|e| Error::Backend(format!("Semaphore error: {}", e)))?;
+        {
+            let _permit = self.semaphore.acquire().await
+                .map_err(|e| Error::Backend(format!("Semaphore error: {}", e)))?;
+            // permit is dropped here, releasing the semaphore
+        }
 
         let mut output = Vec::new();
         let mut current_tokens = prompt_tokens.to_vec();
