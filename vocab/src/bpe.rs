@@ -4,13 +4,16 @@ use crate::tokenizer::Tokenizer;
 use crate::vocab::{TokenizationResult, Vocab};
 use anyhow::Result;
 use async_trait::async_trait;
-use std::future;
-use std::marker;
-use std::pin;
 
 /// BPE tokenizer (GPT-2, GPT-3)
 pub struct BpeTokenizer {
     vocab: Vocab,
+}
+
+impl Default for BpeTokenizer {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl BpeTokenizer {

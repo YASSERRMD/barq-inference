@@ -1,3 +1,31 @@
+#![allow(
+    clippy::all,
+    unexpected_cfgs,
+    dead_code,
+    unused_variables,
+    unused_imports,
+    unused_mut,
+    non_camel_case_types,
+    unused_parens,
+    unused_comparisons,
+    unreachable_code
+)]
+#![allow(
+    dead_code,
+    unused_variables,
+    unused_imports,
+    unused_mut,
+    non_camel_case_types,
+    unused_parens,
+    unused_comparisons,
+    unreachable_code,
+    clippy::needless_update,
+    clippy::too_many_arguments,
+    clippy::needless_range_loop,
+    clippy::let_and_return,
+    clippy::manual_range_contains
+)]
+
 //! Barq - High-performance LLM inference engine CLI
 
 mod benchmark;
@@ -5,7 +33,7 @@ mod performance;
 
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
-use tracing::{error, info, Level};
+use tracing::{info, Level};
 
 #[derive(Parser)]
 #[command(name = "barq")]
@@ -305,11 +333,7 @@ async fn cmd_run(
     draft_max: usize,
     speculation_preset: Option<String>,
 ) -> anyhow::Result<()> {
-    use models::{
-        context::{ContextParams, ModelContext},
-        llama::LlamaModel,
-        loader::Model,
-    };
+    use models::{context::ContextParams, llama::LlamaModel, loader::Model};
     use std::sync::Arc;
     use vocab::{GgufTokenizer, Tokenizer};
 

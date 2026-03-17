@@ -48,7 +48,6 @@ impl SpeculativeDecoding for MockSpeculativeDecoder {
 }
 
 use barq_core::error::{Error, Result};
-use barq_core::tensor::{Shape, Tensor, TensorData, TensorType};
 
 /// Speculative decoding configuration
 #[derive(Debug, Clone)]
@@ -387,7 +386,7 @@ mod tests {
     fn test_sample_token() {
         let logits = vec![0.1, 0.2, 0.3, 0.4];
         let token = sample_token(&logits, 1.0).unwrap();
-        assert!(token >= 0 && token < 4);
+        assert!((0..4).contains(&token));
     }
 
     #[tokio::test]

@@ -1,9 +1,6 @@
 //! Tokenizer trait and common implementations
 
 use async_trait::async_trait;
-use std::future;
-use std::marker;
-use std::pin;
 
 use crate::vocab::{TokenizationResult, Vocab, VocabType};
 use anyhow::Result;
@@ -44,6 +41,12 @@ pub enum TokenizerType {
 /// Simple whitespace tokenizer for testing
 pub struct WhitespaceTokenizer {
     vocab: Vocab,
+}
+
+impl Default for WhitespaceTokenizer {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl WhitespaceTokenizer {

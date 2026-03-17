@@ -6,8 +6,7 @@
 //! - NTK-aware scaling
 //! - LongRoPE
 
-use barq_core::error::{Error, Result};
-use barq_core::tensor::{Shape, Tensor, TensorType};
+use barq_core::error::Result;
 
 /// RoPE scaling type
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

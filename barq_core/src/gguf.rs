@@ -232,12 +232,12 @@ pub struct GgufReader {
 impl GgufReader {
     /// Open a GGUF file
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let file = File::open(path).map_err(|e| Error::Io(e))?;
+        let file = File::open(path).map_err(Error::Io)?;
         let mut reader = BufReader::new(file);
 
         // Read and verify magic
         let mut magic = [0u8; 4];
-        reader.read_exact(&mut magic).map_err(|e| Error::Io(e))?;
+        reader.read_exact(&mut magic).map_err(Error::Io)?;
         if magic != *GGUF_MAGIC {
             return Err(Error::InvalidGguf(format!(
                 "Invalid magic: {:?}, expected {:?}",
@@ -246,7 +246,7 @@ impl GgufReader {
         }
 
         // Read version
-        let version = reader.read_u32::<LE>().map_err(|e| Error::Io(e))?;
+        let version = reader.read_u32::<LE>().map_err(Error::Io)?;
         if version > GGUF_VERSION {
             return Err(Error::InvalidGguf(format!(
                 "Unsupported version: {}, maximum supported: {}",
@@ -255,15 +255,14 @@ impl GgufReader {
         }
 
         // Read tensor count and KV count
-        let tensor_count = reader.read_u64::<LE>().map_err(|e| Error::Io(e))?;
-        let kv_count = reader.read_u64::<LE>().map_err(|e| Error::Io(e))?;
+        let tensor_count = reader.read_u64::<LE>().map_err(Error::Io)?;
+        let kv_count = reader.read_u64::<LE>().map_err(Error::Io)?;
 
         // Read KV pairs
         let mut kv_pairs = HashMap::new();
         for _ in 0..kv_count {
             let key = Self::read_string(&mut reader)?;
-            let value_type =
-                GgufType::from_u32(reader.read_u32::<LE>().map_err(|e| Error::Io(e))?)?;
+            let value_type = GgufType::from_u32(reader.read_u32::<LE>().map_err(Error::Io)?)?;
             let value = Self::read_value(&mut reader, value_type)?;
             kv_pairs.insert(key, value);
         }
@@ -278,16 +277,15 @@ impl GgufReader {
         let mut tensor_info = Vec::with_capacity(tensor_count as usize);
         for _ in 0..tensor_count {
             let name = Self::read_string(&mut reader)?;
-            let n_dims = reader.read_u32::<LE>().map_err(|e| Error::Io(e))?;
+            let n_dims = reader.read_u32::<LE>().map_err(Error::Io)?;
 
             let mut dimensions = Vec::with_capacity(n_dims as usize);
             for _ in 0..n_dims {
-                dimensions.push(reader.read_u64::<LE>().map_err(|e| Error::Io(e))?);
+                dimensions.push(reader.read_u64::<LE>().map_err(Error::Io)?);
             }
 
-            let gguf_type =
-                GgufTensorType::from_u32(reader.read_u32::<LE>().map_err(|e| Error::Io(e))?)?;
-            let offset = reader.read_u64::<LE>().map_err(|e| Error::Io(e))?;
+            let gguf_type = GgufTensorType::from_u32(reader.read_u32::<LE>().map_err(Error::Io)?)?;
+            let offset = reader.read_u64::<LE>().map_err(Error::Io)?;
 
             // Convert GGUF type to standard TensorType for storage
             let dtype = match gguf_type {
@@ -318,41 +316,30 @@ impl GgufReader {
 
     /// Read a string
     fn read_string<R: Read>(reader: &mut R) -> Result<String> {
-        let len = reader.read_u64::<LE>().map_err(|e| Error::Io(e))? as usize;
+        let len = reader.read_u64::<LE>().map_err(Error::Io)? as usize;
         let mut buf = vec![0u8; len];
-        reader.read_exact(&mut buf).map_err(|e| Error::Io(e))?;
+        reader.read_exact(&mut buf).map_err(Error::Io)?;
         String::from_utf8(buf).map_err(|e| Error::InvalidGguf(format!("Invalid UTF-8: {}", e)))
     }
 
     /// Read a value
     fn read_value<R: Read>(reader: &mut R, value_type: GgufType) -> Result<GgufValue> {
         Ok(match value_type {
-            GgufType::Uint8 => GgufValue::Uint8(reader.read_u8().map_err(|e| Error::Io(e))?),
-            GgufType::Int8 => GgufValue::Int8(reader.read_i8().map_err(|e| Error::Io(e))?),
-            GgufType::Uint16 => {
-                GgufValue::Uint16(reader.read_u16::<LE>().map_err(|e| Error::Io(e))?)
-            }
-            GgufType::Int16 => GgufValue::Int16(reader.read_i16::<LE>().map_err(|e| Error::Io(e))?),
-            GgufType::Uint32 => {
-                GgufValue::Uint32(reader.read_u32::<LE>().map_err(|e| Error::Io(e))?)
-            }
-            GgufType::Int32 => GgufValue::Int32(reader.read_i32::<LE>().map_err(|e| Error::Io(e))?),
-            GgufType::Uint64 => {
-                GgufValue::Uint64(reader.read_u64::<LE>().map_err(|e| Error::Io(e))?)
-            }
-            GgufType::Int64 => GgufValue::Int64(reader.read_i64::<LE>().map_err(|e| Error::Io(e))?),
-            GgufType::Float32 => {
-                GgufValue::Float32(reader.read_f32::<LE>().map_err(|e| Error::Io(e))?)
-            }
-            GgufType::Float64 => {
-                GgufValue::Float64(reader.read_f64::<LE>().map_err(|e| Error::Io(e))?)
-            }
-            GgufType::Bool => GgufValue::Bool(reader.read_u8().map_err(|e| Error::Io(e))? != 0),
+            GgufType::Uint8 => GgufValue::Uint8(reader.read_u8().map_err(Error::Io)?),
+            GgufType::Int8 => GgufValue::Int8(reader.read_i8().map_err(Error::Io)?),
+            GgufType::Uint16 => GgufValue::Uint16(reader.read_u16::<LE>().map_err(Error::Io)?),
+            GgufType::Int16 => GgufValue::Int16(reader.read_i16::<LE>().map_err(Error::Io)?),
+            GgufType::Uint32 => GgufValue::Uint32(reader.read_u32::<LE>().map_err(Error::Io)?),
+            GgufType::Int32 => GgufValue::Int32(reader.read_i32::<LE>().map_err(Error::Io)?),
+            GgufType::Uint64 => GgufValue::Uint64(reader.read_u64::<LE>().map_err(Error::Io)?),
+            GgufType::Int64 => GgufValue::Int64(reader.read_i64::<LE>().map_err(Error::Io)?),
+            GgufType::Float32 => GgufValue::Float32(reader.read_f32::<LE>().map_err(Error::Io)?),
+            GgufType::Float64 => GgufValue::Float64(reader.read_f64::<LE>().map_err(Error::Io)?),
+            GgufType::Bool => GgufValue::Bool(reader.read_u8().map_err(Error::Io)? != 0),
             GgufType::String => GgufValue::String(Self::read_string(reader)?),
             GgufType::Array => {
-                let array_type =
-                    GgufType::from_u32(reader.read_u32::<LE>().map_err(|e| Error::Io(e))?)?;
-                let len = reader.read_u64::<LE>().map_err(|e| Error::Io(e))? as usize;
+                let array_type = GgufType::from_u32(reader.read_u32::<LE>().map_err(Error::Io)?)?;
+                let len = reader.read_u64::<LE>().map_err(Error::Io)? as usize;
                 let mut values = Vec::with_capacity(len);
                 for _ in 0..len {
                     values.push(Self::read_value(reader, array_type)?);
@@ -418,7 +405,7 @@ impl GgufReader {
         use std::io::Seek;
         self.reader
             .seek(io::SeekFrom::Start(offset))
-            .map_err(|e| Error::Io(e))?;
+            .map_err(Error::Io)?;
 
         // Calculate total elements
         let total_elements: usize = dimensions.iter().map(|&d| d as usize).product();
@@ -429,9 +416,7 @@ impl GgufReader {
                 let type_size = 4;
                 let total_bytes = total_elements * type_size;
                 let mut data = vec![0u8; total_bytes];
-                self.reader
-                    .read_exact(&mut data)
-                    .map_err(|e| Error::Io(e))?;
+                self.reader.read_exact(&mut data).map_err(Error::Io)?;
 
                 let values: Vec<f32> = data
                     .chunks_exact(4)
@@ -443,9 +428,7 @@ impl GgufReader {
                 let type_size = 2;
                 let total_bytes = total_elements * type_size;
                 let mut data = vec![0u8; total_bytes];
-                self.reader
-                    .read_exact(&mut data)
-                    .map_err(|e| Error::Io(e))?;
+                self.reader.read_exact(&mut data).map_err(Error::Io)?;
 
                 let values: Vec<f32> = data
                     .chunks_exact(2)
@@ -458,7 +441,7 @@ impl GgufReader {
             }
             GgufTensorType::Q4_0 => self.load_q4_0(&dimensions, total_elements)?,
             GgufTensorType::Q4_1 => {
-                return Err(Error::Unsupported(format!("Q4_1 not yet implemented")))
+                return Err(Error::Unsupported("Q4_1 not yet implemented".to_string()))
             }
             GgufTensorType::Q8_0 => self.load_q8_0(&dimensions, total_elements)?,
             GgufTensorType::Q4_K | GgufTensorType::Q4_K_M => {
@@ -485,16 +468,14 @@ impl GgufReader {
         total_elements: usize,
     ) -> Result<crate::tensor::TensorData> {
         let block_size = 32; // Q4_0 block size
-        let n_blocks = (total_elements + block_size - 1) / block_size;
+        let n_blocks = total_elements.div_ceil(block_size);
 
         // Q4_0 format: scale (f32) + quants (16 bytes for 32 values)
         let bytes_per_block = 4 + (block_size / 2);
         let total_bytes = n_blocks * bytes_per_block;
 
         let mut data = vec![0u8; total_bytes];
-        self.reader
-            .read_exact(&mut data)
-            .map_err(|e| Error::Io(e))?;
+        self.reader.read_exact(&mut data).map_err(Error::Io)?;
 
         let mut output = Vec::with_capacity(total_elements);
         let mut offset = 0;
@@ -514,7 +495,7 @@ impl GgufReader {
             offset += 4;
 
             // Read quantized values
-            let q_len = (block_size + 1) / 2;
+            let q_len = block_size.div_ceil(2);
             if offset + q_len > data.len() {
                 break;
             }
@@ -546,16 +527,14 @@ impl GgufReader {
         total_elements: usize,
     ) -> Result<crate::tensor::TensorData> {
         let block_size = 32; // Q8_0 block size
-        let n_blocks = (total_elements + block_size - 1) / block_size;
+        let n_blocks = total_elements.div_ceil(block_size);
 
         // Q8_0 format: scale (f32) + quants (32 bytes)
         let bytes_per_block = 4 + block_size;
         let total_bytes = n_blocks * bytes_per_block;
 
         let mut data = vec![0u8; total_bytes];
-        self.reader
-            .read_exact(&mut data)
-            .map_err(|e| Error::Io(e))?;
+        self.reader.read_exact(&mut data).map_err(Error::Io)?;
 
         let mut output = Vec::with_capacity(total_elements);
         let mut offset = 0;
@@ -602,7 +581,7 @@ impl GgufReader {
     ) -> Result<crate::tensor::TensorData> {
         const QK_K: usize = 256; // Q4_K block size
 
-        let n_blocks = (total_elements + QK_K - 1) / QK_K;
+        let n_blocks = total_elements.div_ceil(QK_K);
 
         // Q4_K format per 256 values (from llama.cpp block_q4_K):
         // - d (f16): 2 bytes (main scale)
@@ -614,9 +593,7 @@ impl GgufReader {
         let total_bytes = n_blocks * BYTES_PER_BLOCK;
 
         let mut data = vec![0u8; total_bytes];
-        self.reader
-            .read_exact(&mut data)
-            .map_err(|e| Error::Io(e))?;
+        self.reader.read_exact(&mut data).map_err(Error::Io)?;
 
         let mut output = Vec::with_capacity(total_elements);
         let mut offset = 0;
@@ -658,7 +635,7 @@ impl GgufReader {
 
             for j in (0..QK_K).step_by(64) {
                 // Process first 32 values
-                let (sc, m) = Self::get_scale_min_k4(is + 0, &scales);
+                let (sc, m) = Self::get_scale_min_k4(is, &scales);
                 let d1 = d * (sc as u32) as f32;
                 let m1 = dmin * (m as u32) as f32;
 
@@ -698,7 +675,7 @@ impl GgufReader {
             (d, m)
         } else {
             let d = (q[j + 4] & 0xF) | ((q[j - 4] >> 6) << 4);
-            let m = (q[j + 4] >> 4) | ((q[j - 0] >> 6) << 4);
+            let m = (q[j + 4] >> 4) | ((q[j] >> 6) << 4);
             (d, m)
         }
     }

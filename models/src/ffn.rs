@@ -1,9 +1,8 @@
 //! Feed-forward network implementation
 
 use barq_core::error::{Error, Result};
-use barq_core::normalization;
-use barq_core::ops::{Add, BinaryOp, MatMul};
-use barq_core::tensor::{Shape, Tensor, TensorData, TensorType};
+use barq_core::ops::{BinaryOp, MatMul};
+use barq_core::tensor::{Tensor, TensorData, TensorType};
 
 /// Feed-forward network (MLP)
 pub struct FeedForward {

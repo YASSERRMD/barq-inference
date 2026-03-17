@@ -313,10 +313,7 @@ mod tests {
 
     #[test]
     fn test_simd_detection() {
-        let level = SimdLevel::detect();
-        println!("Detected SIMD level: {:?}", level);
-        // Should at least have some support on modern CPUs
-        assert!(level >= SimdLevel::None || level <= SimdLevel::AVX512);
+        let _level = SimdLevel::detect();
     }
 
     #[test]
@@ -344,6 +341,6 @@ mod tests {
     fn test_vector_width() {
         let level = SimdLevel::detect();
         let width = level.vector_width();
-        assert!(width >= 1 && width <= 16);
+        assert!((1..=16).contains(&width));
     }
 }

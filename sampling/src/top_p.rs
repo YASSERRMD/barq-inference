@@ -96,7 +96,7 @@ mod tests {
 
     #[test]
     fn test_top_p() {
-        let mut sampler = TopP::new(0.9);
+        let sampler = TopP::new(0.9);
         assert_eq!(sampler.p, 0.9);
     }
 

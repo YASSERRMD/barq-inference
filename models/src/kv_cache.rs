@@ -335,8 +335,8 @@ mod tests {
     fn test_kv_cache_insert() {
         let mut cache = AdvancedKVCache::new(2, 4, 10);
 
-        let k_shape = Shape::new(&[2, 4]);
-        let v_shape = Shape::new(&[2, 4]);
+        let k_shape = Shape::new(vec![2, 4]);
+        let v_shape = Shape::new(vec![2, 4]);
 
         let k = Tensor::new(
             None,
@@ -363,8 +363,8 @@ mod tests {
     fn test_kv_cache_get() {
         let mut cache = AdvancedKVCache::new(2, 4, 10);
 
-        let k_shape = Shape::new(&[2, 4]);
-        let v_shape = Shape::new(&[2, 4]);
+        let k_shape = Shape::new(vec![2, 4]);
+        let v_shape = Shape::new(vec![2, 4]);
 
         let k = Tensor::new(
             None,
@@ -387,16 +387,16 @@ mod tests {
         assert!(result.is_some());
 
         let (retrieved_k, retrieved_v) = result.unwrap();
-        assert_eq!(retrieved_k.shape().dims, k.shape().dims);
-        assert_eq!(retrieved_v.shape().dims, v.shape().dims);
+        assert_eq!(retrieved_k.shape().dims(), k.shape().dims());
+        assert_eq!(retrieved_v.shape().dims(), v.shape().dims());
     }
 
     #[test]
     fn test_kv_cache_stats() {
         let mut cache = AdvancedKVCache::new(2, 4, 10);
 
-        let k_shape = Shape::new(&[2, 4]);
-        let v_shape = Shape::new(&[2, 4]);
+        let k_shape = Shape::new(vec![2, 4]);
+        let v_shape = Shape::new(vec![2, 4]);
 
         let k = Tensor::new(
             None,
@@ -427,8 +427,8 @@ mod tests {
     fn test_kv_cache_clear() {
         let mut cache = AdvancedKVCache::new(2, 4, 10);
 
-        let k_shape = Shape::new(&[2, 4]);
-        let v_shape = Shape::new(&[2, 4]);
+        let k_shape = Shape::new(vec![2, 4]);
+        let v_shape = Shape::new(vec![2, 4]);
 
         let k = Tensor::new(
             None,
