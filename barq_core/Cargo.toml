@@ -1,5 +1,5 @@
 [package]
-name = "core"
+name = "barq_core"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true

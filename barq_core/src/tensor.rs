@@ -216,7 +216,7 @@ impl Strides {
 }
 
 /// Tensor data container
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum TensorData {
     F32(Vec<f32>),
     F16(Vec<f16>),
@@ -284,7 +284,7 @@ impl TensorData {
 }
 
 /// Tensor with reference-counted data
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct Tensor {
     /// Tensor name (optional)
     name: Option<String>,

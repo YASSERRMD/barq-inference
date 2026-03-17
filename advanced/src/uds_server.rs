@@ -10,7 +10,7 @@ use tokio::sync::{mpsc, oneshot, Semaphore};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use serde::{Deserialize, Serialize};
 
-use core::error::{Error, Result};
+use barq_core::error::{Error, Result};
 
 /// Inference request
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -94,10 +94,11 @@ impl InferenceServer {
         self.shutdown_tx = Some(shutdown_tx);
 
         // Spawn request processor
-        let request_rx = self.request_tx.clone();
-        tokio::spawn(async move {
-            Self::request_processor(request_rx).await;
-        });
+        // TODO: Fix channel handling
+        // let request_rx = self.request_tx.clone();
+        // tokio::spawn(async move {
+        //     Self::request_processor(request_rx).await;
+        // });
 
         // Accept connections
         loop {
@@ -203,8 +204,13 @@ impl InferenceServer {
             };
 
             // Send response
-            let resp_bytes = bincode::serialize(&response)
-                .map_err(|e| Error::Backend(format!("Serialize error: {}", e)))?;
+            let resp_bytes = match bincode::serialize(&response) {
+                Ok(bytes) => bytes,
+                Err(e) => {
+                    eprintln!("Serialize error: {}", e);
+                    break;
+                }
+            };
 
             let resp_len = (resp_bytes.len() as u32).to_be_bytes();
             if let Err(e) = stream.write_all(&resp_len).await {

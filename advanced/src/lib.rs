@@ -12,7 +12,7 @@ pub mod uds_server;
 pub mod continuous_batching;
 pub mod metrics;
 pub mod logging;
-pub mod metrics_server;
+// pub mod metrics_server;  // TODO: Fix hyper compatibility issues
 
 pub use speculative::SpeculativeDecoding;
 pub use flash_attention::FlashAttention;
@@ -24,4 +24,4 @@ pub use uds_server::{InferenceServer, InferenceClient, InferenceRequest, Inferen
 pub use continuous_batching::{BatchScheduler, Batch, ContinuousBatchingConfig};
 pub use metrics::{InferenceMetrics, MetricsHandle, RequestGuard, HealthCheck, MetricsResponse, check_context_health, ContextManager, ContextHealth};
 pub use logging::{Logger, RequestLogger, LogLevel, LoggingConfig, init_logger, logger};
-pub use metrics_server::{MetricsServer, MetricsServerConfig, PrometheusExporter};
+// pub use metrics_server::{MetricsServer, MetricsServerConfig, PrometheusExporter};

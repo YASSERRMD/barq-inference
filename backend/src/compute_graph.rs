@@ -2,8 +2,8 @@
 
 use std::collections::HashMap;
 
-use core::tensor::Tensor;
-use core::error::{Error, Result};
+use barq_core::tensor::Tensor;
+use barq_core::error::{Error, Result};
 
 /// Node in compute graph
 #[derive(Debug, Clone)]

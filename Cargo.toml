@@ -1,6 +1,6 @@
 [workspace]
 members = [
-    "core",
+    "barq_core",
     "quant",
     "vocab",
     "models",

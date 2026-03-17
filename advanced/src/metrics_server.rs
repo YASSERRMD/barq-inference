@@ -7,10 +7,11 @@ use std::sync::Arc;
 use std::net::SocketAddr;
 use tokio::net::TcpListener;
 use tokio::sync::RwLock;
-use hyper::server::conn::Http;
+use hyper::server::conn::http1;
 use hyper::service::service_fn;
-use hyper::{Request, Response, Body, StatusCode, Method};
+use hyper::{Request, Response, StatusCode, Method};
 use hyper::body::Bytes;
+use http_body_util::Full;
 
 use crate::metrics::{InferenceMetrics, MetricsHandle, MetricsResponse, HealthCheck};
 use crate::logging::Logger;
@@ -78,7 +79,7 @@ impl MetricsServer {
             let start_time = start_time;
 
             tokio::task::spawn(async move {
-                let http = Http::new();
+                let http = http1::Builder::new();
                 let service = service_fn(move |req| {
                     Self::handle_request(
                         req,

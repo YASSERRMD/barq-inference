@@ -104,9 +104,10 @@ impl InferenceMetrics {
         }
     }
 
-    pub fn export_json(&self) -> Result<String, serde_json::Error> {
-        serde_json::to_string(self)
-    }
+    // TODO: Implement proper JSON export (AtomicU64 doesn't implement Serialize)
+    // pub fn export_json(&self) -> Result<String, serde_json::Error> {
+    //     serde_json::to_string(self)
+    // }
 }
 
 impl Default for InferenceMetrics {
@@ -122,8 +123,8 @@ pub struct RequestGuard {
 }
 
 impl RequestGuard {
-    pub fn complete(self, prompt_tokens: usize, generated_tokens: usize) {
-        if let Some(weak) = self.metrics {
+    pub fn complete(mut self, prompt_tokens: usize, generated_tokens: usize) {
+        if let Some(weak) = &self.metrics {
             if let Some(metrics) = weak.upgrade() {
                 let duration = self.start.elapsed();
                 metrics.record_success(prompt_tokens, generated_tokens, duration.as_millis() as u64);
@@ -218,7 +219,7 @@ pub fn check_context_health(ctx_tokens: usize, ctx_capacity: usize, threshold: f
 
     let usage = ctx_tokens as f64 / ctx_capacity as f64;
 
-    if usage > threshold {
+    if usage > threshold as f64 {
         return false; // Should reset
     }
 
