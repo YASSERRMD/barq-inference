@@ -71,4 +71,145 @@ impl BlockQ3K {
             }
         }
     }
+
+    pub fn quantize(data: &[f32; QK_K]) -> Self {
+        let mut hmask = [0u8; QK_K / 8];
+        let mut qs = [0u8; QK_K / 4];
+        let mut scales = [0u8; 12];
+
+        let mut all_max_abs = 0.0f32;
+
+        for block_idx in 0..16 {
+            let start = block_idx * 16;
+            let block = &data[start..start + 16];
+
+            let mut max_abs = 0.0f32;
+            for &v in block {
+                max_abs = max_abs.max(v.abs());
+            }
+            all_max_abs = all_max_abs.max(max_abs);
+
+            let scale = if max_abs > 0.0 { max_abs / 4.0 } else { 0.0 };
+
+            let scale_quant = if scale > 0.0 {
+                ((max_abs / all_max_abs).min(1.0) * 31.0).min(31.0) as u8
+            } else {
+                0
+            };
+
+            if block_idx < 12 {
+                scales[block_idx] = scale_quant;
+            }
+
+            for i in 0..4 {
+                let mut byte = 0u8;
+                let mut hbyte = 0u8;
+
+                for b in 0..4 {
+                    let idx = i * 4 + b;
+                    let val = block[idx];
+                    let normalized = if scale > 0.0 { val / scale } else { 0.0 };
+
+                    let q_signed = (normalized * 4.0).round().max(-4.0).min(3.0) as i8;
+                    let q_positive = (q_signed + 4) as u8;
+
+                    let low_bits = q_positive & 0x03;
+                    let high_bit = (q_positive >> 2) & 0x01;
+
+                    byte |= low_bits << (2 * b);
+                    hbyte |= high_bit << b;
+                }
+
+                qs[block_idx * 4 + i] = byte;
+                if i % 2 == 0 {
+                    hmask[block_idx * 2 + (i / 2)] = hbyte;
+                } else {
+                    hmask[block_idx * 2 + (i / 2)] |= hbyte << 4;
+                }
+            }
+        }
+
+        let d = f32_to_f16(all_max_abs / 31.0);
+
+        BlockQ3K {
+            hmask,
+            qs,
+            scales,
+            d,
+        }
+    }
+}
+
+#[inline]
+fn get_scale_q3k(j: usize, scales: &[u8]) -> f32 {
+    if j < 4 {
+        (scales[j] & 0x3F) as f32
+    } else {
+        let tmp = scales[j - 4];
+        ((tmp & 0x0F) | ((scales[j] & 0x0F) << 4)) as f32
+    }
+}
+
+#[inline]
+fn f16_to_f32(h: u16) -> f32 {
+    let sign = ((h >> 15) & 1) as i32;
+    let exponent = ((h >> 10) & 0x1F) as i32;
+    let mantissa = (h & 0x3FF) as i32;
+
+    if exponent == 0 {
+        if mantissa == 0 {
+            return if sign != 0 { -0.0 } else { 0.0 };
+        } else {
+            let m = mantissa as f32 / 1024.0;
+            return if sign != 0 {
+                -m * 2.0_f32.powi(-14)
+            } else {
+                m * 2.0_f32.powi(-14)
+            };
+        }
+    } else if exponent == 31 {
+        return if sign != 0 {
+            f32::NEG_INFINITY
+        } else {
+            f32::INFINITY
+        };
+    }
+
+    let e = exponent - 15;
+    let m = 1.0 + mantissa as f32 / 1024.0;
+
+    if sign != 0 {
+        -m * 2.0_f32.powi(e)
+    } else {
+        m * 2.0_f32.powi(e)
+    }
+}
+
+#[inline]
+fn f32_to_f16(f: f32) -> u16 {
+    let bits = f.to_bits();
+    let sign = (bits >> 31) & 1;
+    let exponent = ((bits >> 23) & 0xFF) as i32 - 127;
+    let mantissa = bits & 0x7FFFFF;
+
+    if f == 0.0 {
+        return if sign != 0 { 0x8000 } else { 0 };
+    }
+
+    if exponent >= 16 {
+        return if sign != 0 { 0xFC00 } else { 0x7C00 };
+    }
+
+    if exponent <= -15 {
+        let e = exponent + 24;
+        let m = (mantissa | 0x800000) as f32 / 8388608.0;
+        let subnormal = (m * 2.0_f32.powi(e)) * 1024.0;
+        let m = subnormal as u32;
+        return ((sign << 15) | m) as u16;
+    }
+
+    let sign = (sign as u16) << 15;
+    let e = ((exponent + 15) as u16) << 10;
+    let m = (mantissa >> 13) as u16;
+    sign | e | m
 }
