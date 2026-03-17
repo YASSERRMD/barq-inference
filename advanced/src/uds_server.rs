@@ -156,7 +156,7 @@ impl InferenceServer {
             }
 
             // Parse request
-            let request: InferenceRequest = match bincode::deserialize(&buffer[..len]) {
+            let request: InferenceRequest = match serde_json::from_slice(&buffer[..len]) {
                 Ok(req) => req,
                 Err(e) => {
                     eprintln!("Deserialize error: {}", e);
@@ -204,7 +204,7 @@ impl InferenceServer {
             };
 
             // Send response
-            let resp_bytes = match bincode::serialize(&response) {
+            let resp_bytes = match serde_json::to_vec(&response) {
                 Ok(bytes) => bytes,
                 Err(e) => {
                     eprintln!("Serialize error: {}", e);
@@ -291,7 +291,7 @@ impl InferenceClient {
             .map_err(|e| Error::Backend(format!("Connection failed: {}", e)))?;
 
         // Serialize request
-        let req_bytes = bincode::serialize(&request)
+        let req_bytes = serde_json::to_vec(&request)
             .map_err(|e| Error::Backend(format!("Serialize error: {}", e)))?;
 
         // Send length
@@ -316,7 +316,7 @@ impl InferenceClient {
             .map_err(|e| Error::Backend(format!("Read error: {}", e)))?;
 
         // Deserialize response
-        let response: InferenceResponse = bincode::deserialize(&buffer)
+        let response: InferenceResponse = serde_json::from_slice(&buffer)
             .map_err(|e| Error::Backend(format!("Deserialize error: {}", e)))?;
 
         Ok(response)
