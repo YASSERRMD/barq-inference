@@ -3,8 +3,8 @@
 //! Efficient implementation for MoE models like Mixtral,
 //! supporting expert routing and load balancing.
 
-use barq_core::tensor::{Tensor, TensorType};
 use barq_core::error::{Error, Result};
+use barq_core::tensor::{Tensor, TensorType};
 
 /// MoE configuration
 #[derive(Debug, Clone)]
@@ -57,7 +57,8 @@ impl MoERouter {
             let ids = (0..self.config.n_expert_per_token)
                 .map(|i| i % self.config.n_experts)
                 .collect();
-            let weights = vec![1.0 / self.config.n_expert_per_token as f32; self.config.n_expert_per_token];
+            let weights =
+                vec![1.0 / self.config.n_expert_per_token as f32; self.config.n_expert_per_token];
             expert_ids.push(ids);
             expert_weights.push(weights);
         }
@@ -106,7 +107,9 @@ impl MoEInference {
 
         // TODO: Implement actual MoE forward pass
         // For now, return dummy output
-        Err(Error::Unsupported("MoE forward pass not yet implemented".to_string()))
+        Err(Error::Unsupported(
+            "MoE forward pass not yet implemented".to_string(),
+        ))
     }
 
     /// Returns the router

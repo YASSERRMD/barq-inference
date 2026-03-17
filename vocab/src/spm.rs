@@ -2,11 +2,11 @@
 
 use crate::tokenizer::Tokenizer;
 use crate::vocab::{TokenizationResult, Vocab};
-use std::pin;
+use anyhow::Result;
+use async_trait::async_trait;
 use std::future;
 use std::marker;
-use async_trait::async_trait;
-use anyhow::Result;
+use std::pin;
 
 /// SentencePiece tokenizer (LLaMA, Mistral, etc.)
 pub struct SentencePiece {

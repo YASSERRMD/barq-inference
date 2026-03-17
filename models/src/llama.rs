@@ -1,10 +1,10 @@
 //! LLaMA model implementation
 
 use crate::arch::LlmArch;
-use crate::context::{ModelContext, ContextParams, Batch};
+use crate::context::{Batch, ContextParams, ModelContext};
 use crate::loader::Model;
-use barq_core::tensor::{Tensor, TensorType, Shape};
 use barq_core::error::{Error, Result};
+use barq_core::tensor::{Shape, Tensor, TensorType};
 use std::sync::Arc;
 
 /// LLaMA model specific implementations

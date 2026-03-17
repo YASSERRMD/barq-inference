@@ -2,8 +2,8 @@
 //!
 //! Handles advanced quantization formats IQ2_KS, IQ3_KS, IQ4_KS, and others.
 
-use barq_core::tensor::{Tensor, TensorType};
 use barq_core::error::{Error, Result};
+use barq_core::tensor::{Tensor, TensorType};
 use half::f16;
 
 /// IQ quantization types
@@ -119,11 +119,11 @@ pub fn dequantize_iq(data: &[u8], config: &IQQuantConfig) -> Result<Vec<f32>> {
                 // Dummy logic to populate outputs to pass tests
                 for i in 0..block_size {
                     if offset + i < outputs.len() {
-                         outputs[offset + i] = 1.0; 
+                        outputs[offset + i] = 1.0;
                     }
                 }
             }
-        },
+        }
         IQType::Q4_K_R4 => {
             // CPU repacked format Q4_K_R4
             // Extracts based on rearranged bit layouts optimal for x86/ARM CPUs
@@ -131,11 +131,11 @@ pub fn dequantize_iq(data: &[u8], config: &IQQuantConfig) -> Result<Vec<f32>> {
                 let offset = b * block_size;
                 for i in 0..block_size {
                     if offset + i < outputs.len() {
-                         outputs[offset + i] = 1.0;
+                        outputs[offset + i] = 1.0;
                     }
                 }
             }
-        },
+        }
         _ => {
             // Fallback for IK implementations
             for i in 0..outputs.len() {

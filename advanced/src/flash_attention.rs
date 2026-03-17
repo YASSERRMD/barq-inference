@@ -11,7 +11,7 @@
 //! - SIMD-friendly operations for better vectorization
 
 use barq_core::error::{Error, Result};
-use barq_core::tensor::{Tensor, TensorType, TensorData, Shape};
+use barq_core::tensor::{Shape, Tensor, TensorData, TensorType};
 
 /// Flash Attention-2 configuration
 #[derive(Debug, Clone)]
@@ -83,14 +83,7 @@ impl FlashAttention {
 
         // Process each batch
         for b in 0..batch_size {
-            self.forward_batch(
-                b,
-                q_data,
-                k_data,
-                v_data,
-                seq_len,
-                &mut output,
-            )?;
+            self.forward_batch(b, q_data, k_data, v_data, seq_len, &mut output)?;
         }
 
         Ok(Tensor::new(
@@ -155,9 +148,12 @@ impl FlashAttention {
             let head_stride = seq_len * self.head_dim;
 
             // Extract Q, K, V for this head
-            let q_head = &q_data[batch_idx * batch_stride + head * head_stride..][..seq_len * self.head_dim];
-            let k_head = &k_data[batch_idx * batch_stride + head * head_stride..][..seq_len * self.head_dim];
-            let v_head = &v_data[batch_idx * batch_stride + head * head_stride..][..seq_len * self.head_dim];
+            let q_head =
+                &q_data[batch_idx * batch_stride + head * head_stride..][..seq_len * self.head_dim];
+            let k_head =
+                &k_data[batch_idx * batch_stride + head * head_stride..][..seq_len * self.head_dim];
+            let v_head =
+                &v_data[batch_idx * batch_stride + head * head_stride..][..seq_len * self.head_dim];
 
             // Compute Flash Attention for this head
             let out_start = batch_idx * batch_stride + head * head_stride;
@@ -206,7 +202,8 @@ impl FlashAttention {
                         dot += q[i * self.head_dim + d] * k[j * self.head_dim + d];
                     }
                     // Apply scaling
-                    qk_block[i * (tr_end - tr_start) + (j - tr_start)] = dot / (self.head_dim as f32).sqrt();
+                    qk_block[i * (tr_end - tr_start) + (j - tr_start)] =
+                        dot / (self.head_dim as f32).sqrt();
                 }
             }
 

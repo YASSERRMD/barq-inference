@@ -1,7 +1,7 @@
 //! Layer normalization implementation
 
-use crate::tensor::{Tensor, TensorType, Shape, TensorData};
 use crate::error::{Error, Result};
+use crate::tensor::{Shape, Tensor, TensorData, TensorType};
 
 pub fn layer_norm(input: &[f32], weight: &[f32], bias: &[f32], eps: f32) -> Result<Vec<f32>> {
     if input.is_empty() {
@@ -13,14 +13,16 @@ pub fn layer_norm(input: &[f32], weight: &[f32], bias: &[f32], eps: f32) -> Resu
     if weight.len() != n {
         return Err(Error::tensor(format!(
             "Weight size mismatch: expected {}, got {}",
-            n, weight.len()
+            n,
+            weight.len()
         )));
     }
 
     if bias.len() != n {
         return Err(Error::tensor(format!(
             "Bias size mismatch: expected {}, got {}",
-            n, bias.len()
+            n,
+            bias.len()
         )));
     }
 
@@ -29,16 +31,24 @@ pub fn layer_norm(input: &[f32], weight: &[f32], bias: &[f32], eps: f32) -> Resu
     let mean = sum / n as f32;
 
     // Compute variance
-    let variance = input.iter().map(|&x| {
-        let diff = x - mean;
-        diff * diff
-    }).sum::<f32>() / n as f32;
+    let variance = input
+        .iter()
+        .map(|&x| {
+            let diff = x - mean;
+            diff * diff
+        })
+        .sum::<f32>()
+        / n as f32;
 
     // Normalize and apply affine transform
-    let result: Vec<f32> = input.iter().enumerate().map(|(i, &x)| {
-        let normalized = (x - mean) / (variance + eps).sqrt();
-        normalized * weight[i] + bias[i]
-    }).collect();
+    let result: Vec<f32> = input
+        .iter()
+        .enumerate()
+        .map(|(i, &x)| {
+            let normalized = (x - mean) / (variance + eps).sqrt();
+            normalized * weight[i] + bias[i]
+        })
+        .collect();
 
     Ok(result)
 }
@@ -53,7 +63,8 @@ pub fn rms_norm(input: &[f32], weight: &[f32], eps: f32) -> Result<Vec<f32>> {
     if weight.len() != n {
         return Err(Error::tensor(format!(
             "Weight size mismatch: expected {}, got {}",
-            n, weight.len()
+            n,
+            weight.len()
         )));
     }
 
@@ -62,9 +73,11 @@ pub fn rms_norm(input: &[f32], weight: &[f32], eps: f32) -> Result<Vec<f32>> {
     let rms = (mean_square + eps).sqrt();
 
     // Normalize and apply weight
-    let result: Vec<f32> = input.iter().enumerate().map(|(i, &x)| {
-        (x / rms) * weight[i]
-    }).collect();
+    let result: Vec<f32> = input
+        .iter()
+        .enumerate()
+        .map(|(i, &x)| (x / rms) * weight[i])
+        .collect();
 
     Ok(result)
 }
@@ -85,10 +98,14 @@ mod tests {
 
         // Check that result has approximately zero mean and unit variance
         let mean: f32 = result.iter().sum::<f32>() / result.len() as f32;
-        let variance = result.iter().map(|&x| {
-            let diff = x - mean;
-            diff * diff
-        }).sum::<f32>() / result.len() as f32;
+        let variance = result
+            .iter()
+            .map(|&x| {
+                let diff = x - mean;
+                diff * diff
+            })
+            .sum::<f32>()
+            / result.len() as f32;
 
         assert!(mean.abs() < 1e-4);
         assert!((variance - 1.0).abs() < 1e-4);

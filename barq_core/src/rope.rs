@@ -51,7 +51,8 @@ pub fn apply_rope(
     if cos.len() != seq_len * (dim / 2) || sin.len() != seq_len * (dim / 2) {
         return Err(Error::tensor(format!(
             "Cos/sin size mismatch: expected {}, got {}",
-            seq_len * (dim / 2), cos.len()
+            seq_len * (dim / 2),
+            cos.len()
         )));
     }
 

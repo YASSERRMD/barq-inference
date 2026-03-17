@@ -14,17 +14,11 @@ pub struct TopP {
 
 impl TopP {
     pub fn new(p: f32) -> Self {
-        Self {
-            p,
-            min_keep: 1,
-        }
+        Self { p, min_keep: 1 }
     }
 
     pub fn with_min_keep(p: f32, min_keep: usize) -> Self {
-        Self {
-            p,
-            min_keep,
-        }
+        Self { p, min_keep }
     }
 }
 
@@ -109,10 +103,7 @@ mod tests {
     #[test]
     fn test_top_p_full() {
         let mut sampler = TopP::new(1.0);
-        let mut logits = vec![
-            TokenData::new(0, 1.0),
-            TokenData::new(1, 2.0),
-        ];
+        let mut logits = vec![TokenData::new(0, 1.0), TokenData::new(1, 2.0)];
 
         let token = sampler.sample(&mut logits).unwrap();
         assert_eq!(token, 1); // Should pick best
