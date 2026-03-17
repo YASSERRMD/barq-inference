@@ -65,7 +65,7 @@ impl BlockQ2K {
         let mut scales = [0u8; QK_K / 16];
         let mut qs = [0u8; QK_K / 4];
         let mut block_scales = [0.0f32; 16];
-        let block_mins = [0.0f32; 16];
+        let mut block_mins = [0.0f32; 16];
         let mut max_d = 0.0f32;
         let mut max_m = 0.0f32;
 
