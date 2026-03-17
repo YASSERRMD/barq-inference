@@ -132,7 +132,7 @@ mod tests {
         let router = MoERouter::new(config);
 
         // Create dummy routing logits
-        let logits = Tensor::zeros(TensorType::F32, core::tensor::Shape::matrix(10, 8));
+        let logits = Tensor::zeros(TensorType::F32, barq_core::tensor::Shape::new(vec![10, 8]));
 
         let result = router.route(&logits);
         assert!(result.is_ok());

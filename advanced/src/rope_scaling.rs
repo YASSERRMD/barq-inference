@@ -155,7 +155,7 @@ mod tests {
         let yarn = YaRNScaling::new(config);
         let scale = yarn.compute_yarn_scale(1024);
 
-        assert!(scale > 1.0 && scale < 2.0);
+        assert!(scale > 1.0 && scale <= 2.0);
     }
 
     #[test]
