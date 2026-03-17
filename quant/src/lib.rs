@@ -32,12 +32,16 @@
 //! used to compress LLM weights while maintaining accuracy.
 
 pub mod iq;
+pub mod q2_k;
+pub mod q3_k;
 pub mod q4_0;
 pub mod q4_k;
 pub mod simd_quant;
 // pub mod ik_quant;  // TODO: Implement
 // pub mod blockwise;  // TODO: Implement
 
+pub use q2_k::Q2K;
+pub use q3_k::Q3K;
 pub use q4_0::Q4_0;
 pub use q4_k::Q4_K;
 pub use simd_quant::{dequantize_q4_0_simd, matmul_q4_0_simd};
