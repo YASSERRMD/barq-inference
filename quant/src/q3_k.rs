@@ -213,3 +213,138 @@ fn f32_to_f16(f: f32) -> u16 {
     let m = (mantissa >> 13) as u16;
     sign | e | m
 }
+
+pub struct Q3K {
+    block_size: usize,
+}
+
+impl Q3K {
+    pub fn new() -> Self {
+        Self { block_size: QK_K }
+    }
+
+    pub fn quantize(&self, input: &[f32]) -> Result<Vec<u8>> {
+        let n_blocks = input.len() / QK_K;
+        let remainder = input.len() % QK_K;
+
+        let total_blocks = if remainder > 0 {
+            n_blocks + 1
+        } else {
+            n_blocks
+        };
+        let mut output = Vec::with_capacity(total_blocks * BlockQ3K::size_bytes());
+
+        for block_idx in 0..n_blocks {
+            let start = block_idx * QK_K;
+            let block: &[f32; QK_K] = input[start..start + QK_K]
+                .try_into()
+                .map_err(|_| Error::Quantization("Invalid block size".into()))?;
+
+            let qblock = BlockQ3K::quantize(block);
+            output.extend_from_slice(unsafe {
+                std::slice::from_raw_parts(
+                    &qblock as *const BlockQ3K as *const u8,
+                    std::mem::size_of::<BlockQ3K>(),
+                )
+            });
+        }
+
+        if remainder > 0 {
+            let mut last_block = [0.0f32; QK_K];
+            last_block[..remainder].copy_from_slice(&input[n_blocks * QK_K..]);
+            let qblock = BlockQ3K::quantize(&last_block);
+            output.extend_from_slice(unsafe {
+                std::slice::from_raw_parts(
+                    &qblock as *const BlockQ3K as *const u8,
+                    std::mem::size_of::<BlockQ3K>(),
+                )
+            });
+        }
+
+        Ok(output)
+    }
+
+    pub fn dequantize(&self, input: &[u8], output_size: usize) -> Result<Vec<f32>> {
+        let block_bytes = BlockQ3K::size_bytes();
+        let n_blocks = (output_size + QK_K - 1) / QK_K;
+
+        let mut output = vec![0.0f32; n_blocks * QK_K];
+
+        for (block_idx, out_chunk) in output.chunks_mut(QK_K).enumerate().take(n_blocks) {
+            let offset = block_idx * block_bytes;
+            if offset + block_bytes > input.len() {
+                break;
+            }
+
+            let qblock: &BlockQ3K = unsafe { &*(input.as_ptr().add(offset) as *const BlockQ3K) };
+
+            qblock.dequantize(out_chunk);
+        }
+
+        output.truncate(output_size);
+        Ok(output)
+    }
+}
+
+impl Default for Q3K {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_q3_k_block_size() {
+        let q = Q3K::new();
+        assert_eq!(q.block_size, QK_K);
+    }
+
+    #[test]
+    fn test_q3_k_size() {
+        assert_eq!(BlockQ3K::size_bytes(), 110);
+    }
+
+    #[test]
+    fn test_q3_k_roundtrip() {
+        let quant = Q3K::new();
+
+        let input: Vec<f32> = (0..256).map(|i| (i as f32 - 128.0) / 50.0).collect();
+        let quantized = quant.quantize(&input).unwrap();
+        let dequantized = quant.dequantize(&quantized, input.len()).unwrap();
+
+        assert_eq!(dequantized.len(), input.len());
+
+        for (i, (&orig, &deq)) in input.iter().zip(dequantized.iter()).enumerate() {
+            let error = (orig - deq).abs();
+            assert!(
+                error < 0.2,
+                "Error at index {}: {} vs {} (error={})",
+                i,
+                orig,
+                deq,
+                error
+            );
+        }
+    }
+
+    #[test]
+    fn test_q3_k_signed_values() {
+        let quant = Q3K::new();
+
+        let input: Vec<f32> = vec![-4.0, -2.0, 0.0, 2.0, 4.0]
+            .into_iter()
+            .cycle()
+            .take(256)
+            .collect();
+        let quantized = quant.quantize(&input).unwrap();
+        let dequantized = quant.dequantize(&quantized, input.len()).unwrap();
+
+        assert!(
+            dequantized.iter().any(|&v| v < 0.0),
+            "Should have negative values"
+        );
+    }
+}
