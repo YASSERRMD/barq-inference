@@ -104,7 +104,8 @@ impl PromptCache {
         let first = tokens[0];
         if let Some(child) = node.children.get_mut(&first) {
             // Find common prefix length between `tokens` and this child's edge
-            let common = tokens.iter()
+            let common = tokens
+                .iter()
                 .zip(child.tokens.iter())
                 .take_while(|(a, b)| a == b)
                 .count();
@@ -165,7 +166,8 @@ impl PromptCache {
         let first = tokens[0];
 
         if let Some(child) = node.children.get_mut(&first) {
-            let common = tokens.iter()
+            let common = tokens
+                .iter()
                 .zip(child.tokens.iter())
                 .take_while(|(a, b)| a == b)
                 .count();
@@ -206,11 +208,16 @@ impl PromptCache {
 
             if !new_tokens.is_empty() {
                 let new_key = new_tokens[0];
-                child.children.insert(new_key, Box::new(RadixNode::new(new_tokens, new_pages)));
+                child
+                    .children
+                    .insert(new_key, Box::new(RadixNode::new(new_tokens, new_pages)));
             }
         } else {
             // No matching child — insert directly
-            node.children.insert(first, Box::new(RadixNode::new(tokens.to_vec(), pages.to_vec())));
+            node.children.insert(
+                first,
+                Box::new(RadixNode::new(tokens.to_vec(), pages.to_vec())),
+            );
         }
     }
 
@@ -221,9 +228,7 @@ impl PromptCache {
 
         // Collect children sorted by last access time (oldest first)
         let mut keys: Vec<i32> = node.children.keys().copied().collect();
-        keys.sort_by_key(|k| {
-            node.children[k].last_accessed
-        });
+        keys.sort_by_key(|k| node.children[k].last_accessed);
 
         let mut to_remove = Vec::new();
         for key in keys {

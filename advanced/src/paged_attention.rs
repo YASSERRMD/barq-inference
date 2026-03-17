@@ -7,8 +7,8 @@ use std::collections::HashMap;
 
 use tokio::sync::Mutex;
 
-use barq_core::tensor::{Tensor, TensorType, Shape};
 use barq_core::error::{Error, Result};
+use barq_core::tensor::{Shape, Tensor, TensorType};
 
 /// Page in KV cache
 #[derive(Debug, Clone)]
@@ -42,12 +42,14 @@ impl PagedAttention {
     pub fn new(max_pages: usize, block_size: usize) -> Self {
         let free_pages: Vec<usize> = (0..max_pages).collect();
         let pages: Vec<Option<CachePage>> = (0..max_pages)
-            .map(|id| Some(CachePage {
-                id,
-                block_size,
-                data: None,
-                ref_count: 0,
-            }))
+            .map(|id| {
+                Some(CachePage {
+                    id,
+                    block_size,
+                    data: None,
+                    ref_count: 0,
+                })
+            })
             .collect();
 
         Self {
@@ -156,7 +158,8 @@ impl PagedAttention {
             .collect();
 
         // Gather used slots sorted descending (move high IDs into low slots)
-        let mut used_high: Vec<usize> = used.iter()
+        let mut used_high: Vec<usize> = used
+            .iter()
             .copied()
             .filter(|id| free_slots.first().map(|f| id > f).unwrap_or(false))
             .collect();

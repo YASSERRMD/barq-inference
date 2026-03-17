@@ -5,8 +5,8 @@
 //! - CPU SIMD detection
 //! - Platform-specific optimizations
 
-use std::sync::OnceLock;
 use std::collections::HashMap;
+use std::sync::OnceLock;
 
 /// Platform type
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,7 +91,7 @@ pub fn detect_simd() -> SIMDCapabilities {
             platform,
             avx2: false,
             avx512: false,
-            neon: true,  // All aarch64 has NEON
+            neon: true, // All aarch64 has NEON
             sve: false, // TODO: Detect SVE at runtime
         }
     }
@@ -135,32 +135,26 @@ pub fn get_device_info() -> DeviceInfo {
             }
         }
 
-        PlatformType::Cuda => {
-            DeviceInfo {
-                platform,
-                device_name: "CUDA Device".to_string(),
-                compute_units: 0,
-                memory_mb: 0,
-            }
-        }
+        PlatformType::Cuda => DeviceInfo {
+            platform,
+            device_name: "CUDA Device".to_string(),
+            compute_units: 0,
+            memory_mb: 0,
+        },
 
-        PlatformType::CpuSimd => {
-            DeviceInfo {
-                platform,
-                device_name: get_cpu_name(),
-                compute_units: num_cpus::get(),
-                memory_mb: get_system_memory_mb(),
-            }
-        }
+        PlatformType::CpuSimd => DeviceInfo {
+            platform,
+            device_name: get_cpu_name(),
+            compute_units: num_cpus::get(),
+            memory_mb: get_system_memory_mb(),
+        },
 
-        PlatformType::Unknown => {
-            DeviceInfo {
-                platform,
-                device_name: "Unknown Device".to_string(),
-                compute_units: 0,
-                memory_mb: 0,
-            }
-        }
+        PlatformType::Unknown => DeviceInfo {
+            platform,
+            device_name: "Unknown Device".to_string(),
+            compute_units: 0,
+            memory_mb: 0,
+        },
     }
 }
 
@@ -242,9 +236,7 @@ fn get_apple_gpu_cores() -> usize {
 fn get_apple_gpu_memory() -> usize {
     use std::process::Command;
 
-    let output = Command::new("sysctl")
-        .args(&["-n", "hw.memsize"])
-        .output();
+    let output = Command::new("sysctl").args(&["-n", "hw.memsize"]).output();
 
     match output {
         Ok(output) => {
@@ -309,9 +301,7 @@ fn get_system_memory_mb() -> usize {
     {
         use std::process::Command;
 
-        let output = Command::new("sysctl")
-            .args(&["-n", "hw.memsize"])
-            .output();
+        let output = Command::new("sysctl").args(&["-n", "hw.memsize"]).output();
 
         match output {
             Ok(output) => {
@@ -363,7 +353,13 @@ mod tests {
     fn test_simd_detection() {
         let simd = detect_simd();
         // Should have detected something
-        assert!(simd.avx2 || simd.avx512 || simd.neon || simd.sve || matches!(simd.platform, PlatformType::Unknown));
+        assert!(
+            simd.avx2
+                || simd.avx512
+                || simd.neon
+                || simd.sve
+                || matches!(simd.platform, PlatformType::Unknown)
+        );
     }
 
     #[test]

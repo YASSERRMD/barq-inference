@@ -145,11 +145,7 @@ unsafe fn reduce_max_neon(arr: &[f32]) -> f32 {
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
-unsafe fn softmax_avx2(
-    logits: &[f32],
-    output: &mut [f32],
-    max_logit: f32,
-) -> Result<()> {
+unsafe fn softmax_avx2(logits: &[f32], output: &mut [f32], max_logit: f32) -> Result<()> {
     use std::arch::x86_64::*;
 
     let max_vec = _mm256_set1_ps(max_logit);
@@ -202,11 +198,7 @@ unsafe fn softmax_avx2(
 
 #[cfg(target_arch = "aarch64")]
 #[target_feature(enable = "neon")]
-unsafe fn softmax_neon(
-    logits: &[f32],
-    output: &mut [f32],
-    max_logit: f32,
-) -> Result<()> {
+unsafe fn softmax_neon(logits: &[f32], output: &mut [f32], max_logit: f32) -> Result<()> {
     use std::arch::aarch64::*;
 
     let max_vec = vdupq_n_f32(max_logit);

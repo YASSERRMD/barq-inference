@@ -73,9 +73,12 @@ impl InferenceMetrics {
 
     pub fn record_success(&self, prompt_tokens: usize, generated_tokens: usize, duration_ms: u64) {
         self.successful_requests.fetch_add(1, Ordering::Relaxed);
-        self.total_tokens_generated.fetch_add(generated_tokens as u64, Ordering::Relaxed);
-        self.total_prompt_tokens.fetch_add(prompt_tokens as u64, Ordering::Relaxed);
-        self.total_inference_time_ms.fetch_add(duration_ms, Ordering::Relaxed);
+        self.total_tokens_generated
+            .fetch_add(generated_tokens as u64, Ordering::Relaxed);
+        self.total_prompt_tokens
+            .fetch_add(prompt_tokens as u64, Ordering::Relaxed);
+        self.total_inference_time_ms
+            .fetch_add(duration_ms, Ordering::Relaxed);
     }
 
     pub fn record_failure(&self) {
@@ -127,7 +130,11 @@ impl RequestGuard {
         if let Some(weak) = &self.metrics {
             if let Some(metrics) = weak.upgrade() {
                 let duration = self.start.elapsed();
-                metrics.record_success(prompt_tokens, generated_tokens, duration.as_millis() as u64);
+                metrics.record_success(
+                    prompt_tokens,
+                    generated_tokens,
+                    duration.as_millis() as u64,
+                );
             }
         }
     }
@@ -268,7 +275,11 @@ impl ContextManager {
         }
     }
 
-    pub fn with_thresholds(capacity: usize, degraded_threshold: f32, critical_threshold: f32) -> Self {
+    pub fn with_thresholds(
+        capacity: usize,
+        degraded_threshold: f32,
+        critical_threshold: f32,
+    ) -> Self {
         Self {
             current_tokens: 0,
             capacity,
@@ -312,7 +323,8 @@ impl ContextManager {
 
     pub fn reset(&mut self) {
         self.current_tokens = 0;
-        self.reset_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.reset_count
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
     pub fn reset_count(&self) -> u64 {
@@ -347,7 +359,10 @@ mod tests {
         assert_eq!(metrics.successful_requests.load(Ordering::Relaxed), 1);
         assert_eq!(metrics.total_tokens_generated.load(Ordering::Relaxed), 20);
         assert_eq!(metrics.total_prompt_tokens.load(Ordering::Relaxed), 10);
-        assert_eq!(metrics.total_inference_time_ms.load(Ordering::Relaxed), 1000);
+        assert_eq!(
+            metrics.total_inference_time_ms.load(Ordering::Relaxed),
+            1000
+        );
     }
 
     #[test]

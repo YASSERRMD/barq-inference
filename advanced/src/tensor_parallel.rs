@@ -8,8 +8,8 @@ use std::sync::Arc;
 
 use tokio::sync::RwLock;
 
-use barq_core::tensor::{Tensor, TensorType, Shape};
 use barq_core::error::{Error, Result};
+use barq_core::tensor::{Shape, Tensor, TensorType};
 
 /// Device ID type
 pub type DeviceId = usize;
@@ -112,7 +112,9 @@ impl TensorParallel {
             return Ok(tensor.clone());
         }
 
-        Err(Error::Unsupported("All-reduce not yet implemented".to_string()))
+        Err(Error::Unsupported(
+            "All-reduce not yet implemented".to_string(),
+        ))
     }
 
     /// Broadcast a tensor from device 0 to all devices

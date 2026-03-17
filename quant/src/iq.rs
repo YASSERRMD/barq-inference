@@ -4,14 +4,15 @@
 //! Reference: ik_llama.cpp/ggml/src/iqk/iqk_quantize.cpp
 
 use barq_core::error::{Error, Result};
+use barq_core::tensor::{Tensor, TensorType};
 use half::f16;
 
 /// The non-linear 4-bit value lookup table for IQ4_KS.
 /// Two groups of 16: base values (index 0..15) and shifted values (index 16..31).
 /// Source: ggml-common.h `iq4k_values`
 pub const IQ4K_VALUES: [i8; 32] = [
-    -127, -104, -83, -65, -49, -35, -22, -10, 1, 13, 25, 38, 53, 69, 89, 113,
-    -123, -100, -79, -61, -45, -31, -18,  -6, 5, 17, 29, 42, 57, 73, 93, 117,
+    -127, -104, -83, -65, -49, -35, -22, -10, 1, 13, 25, 38, 53, 69, 89, 113, -123, -100, -79, -61,
+    -45, -31, -18, -6, 5, 17, 29, 42, 57, 73, 93, 117,
 ];
 
 /// IQ quantization types
@@ -52,10 +53,16 @@ impl Default for IQQuantConfig {
 
 impl IQQuantConfig {
     pub fn iq4_ks() -> Self {
-        Self { iq_type: IQType::IQ4_KS, block_size: 256 }
+        Self {
+            iq_type: IQType::IQ4_KS,
+            block_size: 256,
+        }
     }
     pub fn q4_k_r4() -> Self {
-        Self { iq_type: IQType::Q4_K_R4, block_size: 256 }
+        Self {
+            iq_type: IQType::Q4_K_R4,
+            block_size: 256,
+        }
     }
 }
 
@@ -114,7 +121,7 @@ pub struct BlockQ4KR4 {
 /// Each block_iq4_ks: `scales[8]` + `qs[128]`
 pub fn dequantize_iq4_ks(data: &[u8], n_elements: usize) -> Result<Vec<f32>> {
     const QK_K: usize = 256;
-    const BLOCK_SIZE: usize = 32;  // sub-block size within the super-block
+    const BLOCK_SIZE: usize = 32; // sub-block size within the super-block
     const SCALES_PER_BLOCK: usize = QK_K / BLOCK_SIZE; // = 8
 
     // The per-row f32 scale `d` is the first 4 bytes
@@ -132,7 +139,9 @@ pub fn dequantize_iq4_ks(data: &[u8], n_elements: usize) -> Result<Vec<f32>> {
     if block_data.len() < n_blocks * block_bytes {
         return Err(Error::Tensor(format!(
             "IQ4_KS: need {} bytes for {} blocks, got {}",
-            n_blocks * block_bytes, n_blocks, block_data.len()
+            n_blocks * block_bytes,
+            n_blocks,
+            block_data.len()
         )));
     }
 
@@ -184,7 +193,7 @@ pub fn dequantize_iq(data: &[u8], config: &IQQuantConfig) -> Result<Vec<f32>> {
                 let n_blocks = (data.len().saturating_sub(4)) / block_bytes;
                 n_blocks * 256
             }
-            _ => data.len() // fallback
+            _ => data.len(), // fallback
         }
     };
 
@@ -222,7 +231,7 @@ mod tests {
         // scales[0] = 127 (scale_level = 127 & 0xFE - 127 = 126 - 127 = -1, not zero)
         // Use scale_byte = 128 = 0x80 → scale_level = 128 & 0xFE - 127 = 128 - 127 = 1, no shift
         data[4] = 128u8; // scales[0]
-        // qs all zero → all values are IQ4K_VALUES[0] = -127
+                         // qs all zero → all values are IQ4K_VALUES[0] = -127
         let result = dequantize_iq4_ks(&data, 256).unwrap();
         assert_eq!(result.len(), 256);
         // All qs nibbles are 0x0 → IQ4K_VALUES[0] = -127

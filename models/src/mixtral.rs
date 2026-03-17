@@ -1,7 +1,7 @@
 //! Mixtral (Mixture of Experts) model implementation
 
 use crate::arch::LlmArch;
-use crate::context::{ModelContext, ContextParams};
+use crate::context::{ContextParams, ModelContext};
 use crate::loader::Model;
 use barq_core::error::{Error, Result};
 use std::sync::Arc;
@@ -25,11 +25,13 @@ impl MixtralModel {
         }
 
         // Extract MoE parameters from model metadata
-        let n_expert = model.get_metadata("llama.expert_count")
+        let n_expert = model
+            .get_metadata("llama.expert_count")
             .and_then(|s| s.parse::<usize>().ok())
             .unwrap_or(8);
 
-        let n_expert_per_token = model.get_metadata("llama.expert_used_count")
+        let n_expert_per_token = model
+            .get_metadata("llama.expert_used_count")
             .and_then(|s| s.parse::<usize>().ok())
             .unwrap_or(2);
 

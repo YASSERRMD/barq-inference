@@ -7,15 +7,15 @@
 //! - ROCm (AMD GPUs)
 //! - Vulkan (cross-platform GPU)
 
-pub mod device;
 pub mod buffer;
+pub mod compute_graph;
 pub mod cpu;
 pub mod cuda;
+pub mod device;
 pub mod metal;
 pub mod tensor_ops;
-pub mod compute_graph;
 
-pub use device::{Device, DeviceType, CpuDevice, GpuDevice};
 pub use buffer::{Buffer, BufferType, CpuBuffer, GpuBuffer};
 pub use cpu::CpuBackend;
-pub use tensor_ops::{TensorOps, TensorOp};
+pub use device::{CpuDevice, Device, DeviceType, GpuDevice};
+pub use tensor_ops::{TensorOp, TensorOps};

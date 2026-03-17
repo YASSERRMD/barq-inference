@@ -3,8 +3,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-
-
 /// Token ID type
 pub type TokenId = u32;
 
