@@ -8,7 +8,8 @@
     non_camel_case_types,
     unused_parens,
     unused_comparisons,
-    unreachable_code
+    unreachable_code,
+    unused_unsafe
 )]
 #![allow(
     dead_code,
