@@ -3,4 +3,23 @@
 tmp/
 *.profraw
 *.profdata
+*.pdb
+Cargo.lock
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Models
+*.gguf
+*.gguf.*
+*.bin
+tmp_models/
+*.safetensors
+
+# Logs
 *.log

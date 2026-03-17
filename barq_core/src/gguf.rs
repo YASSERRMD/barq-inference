@@ -612,7 +612,6 @@ impl GgufReader {
 
             // Dequantize: matching llama.cpp dequantize_row_q4_K()
             let mut is = 0usize;
-            let mut q_idx = 0usize;
 
             for j in (0..QK_K).step_by(64) {
                 // Process first 32 values
