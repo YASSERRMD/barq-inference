@@ -79,7 +79,7 @@ impl MetricsServer {
             let start_time = start_time;
 
             tokio::task::spawn(async move {
-                let http = http1::new();
+                let http = http1::Builder::new();
                 let service = service_fn(move |req| {
                     Self::handle_request(
                         req,
