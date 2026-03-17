@@ -64,9 +64,12 @@ impl BlockQ2K {
     pub fn quantize(data: &[f32; QK_K]) -> Self {
         let mut scales = [0u8; QK_K / 16];
         let mut qs = [0u8; QK_K / 4];
+        let mut block_scales = [0.0f32; 16];
+        let block_mins = [0.0f32; 16];
         let mut max_d = 0.0f32;
         let mut max_m = 0.0f32;
 
+        // First pass: compute scales for all blocks
         for block_idx in 0..16 {
             let start = block_idx * 16;
             let block = &data[start..start + 16];
@@ -79,31 +82,45 @@ impl BlockQ2K {
             }
 
             let range = max_val - min_val;
-            let scale = if range > 0.0 { range / 3.0 } else { 0.0 };
+            let scale = if range > 0.0 { range / 3.0 } else { 1.0 };
 
-            let sc_quant = if scale > 0.0 {
-                (scale / max_d * 15.0).min(15.0) as u8
+            block_scales[block_idx] = scale;
+            block_mins[block_idx] = min_val;
+
+            max_d = max_d.max(scale);
+            max_m = max_m.max(min_val.abs());
+        }
+
+        // Second pass: quantize blocks
+        for block_idx in 0..16 {
+            let start = block_idx * 16;
+            let block = &data[start..start + 16];
+
+            let scale = block_scales[block_idx];
+            let min_val = block_mins[block_idx];
+            let max_val = min_val + scale * 3.0;
+            let range = max_val - min_val;
+
+            let sc_quant = if max_d > 0.0 {
+                (scale / max_d * 15.0).min(15.0).max(0.0) as u8
             } else {
                 0
             };
 
-            let m_quant = if min_val < 0.0 {
-                ((-min_val) / max_m * 15.0).min(15.0) as u8
+            let m_quant = if max_m > 0.0 {
+                ((-min_val).min(0.0).abs() / max_m * 15.0).min(15.0).max(0.0) as u8
             } else {
                 0
             };
 
             scales[block_idx] = (m_quant << 4) | sc_quant;
 
-            max_d = max_d.max(scale);
-            max_m = max_m.max(min_val.abs());
-
             for i in 0usize..4 {
                 let mut byte = 0u8;
                 for b in 0..4 {
                     let idx = i * 4 + b;
                     let val = block[idx];
-                    let q = if scale > 0.0 {
+                    let q = if range > 0.0 {
                         let normalized = (val - min_val) / range;
                         (normalized * 3.0).round().min(3.0).max(0.0) as u8
                     } else {
@@ -115,8 +132,8 @@ impl BlockQ2K {
             }
         }
 
-        let d = f32_to_f16(max_d / 15.0);
-        let dmin = f32_to_f16(max_m / 15.0);
+        let d = f32_to_f16(if max_d > 0.0 { max_d / 15.0 } else { 0.0 });
+        let dmin = f32_to_f16(if max_m > 0.0 { max_m / 15.0 } else { 0.0 });
 
         BlockQ2K {
             scales,

@@ -76,9 +76,10 @@ impl BlockQ3K {
         let mut hmask = [0u8; QK_K / 8];
         let mut qs = [0u8; QK_K / 4];
         let mut scales = [0u8; 12];
-
+        let mut block_max_abs = [0.0f32; 16];
         let mut all_max_abs = 0.0f32;
 
+        // First pass: compute max_abs for all blocks
         for block_idx in 0..16 {
             let start = block_idx * 16;
             let block = &data[start..start + 16];
@@ -87,12 +88,20 @@ impl BlockQ3K {
             for &v in block {
                 max_abs = max_abs.max(v.abs());
             }
+            block_max_abs[block_idx] = max_abs;
             all_max_abs = all_max_abs.max(max_abs);
+        }
 
-            let scale = if max_abs > 0.0 { max_abs / 4.0 } else { 0.0 };
+        // Second pass: quantize blocks
+        for block_idx in 0..16 {
+            let start = block_idx * 16;
+            let block = &data[start..start + 16];
 
-            let scale_quant = if scale > 0.0 {
-                ((max_abs / all_max_abs).min(1.0) * 31.0).min(31.0) as u8
+            let max_abs = block_max_abs[block_idx];
+            let scale = if max_abs > 0.0 { max_abs / 4.0 } else { 1.0 };
+
+            let scale_quant = if all_max_abs > 0.0 {
+                ((max_abs / all_max_abs).min(1.0) * 31.0).min(31.0).max(0.0) as u8
             } else {
                 0
             };
@@ -129,7 +138,7 @@ impl BlockQ3K {
             }
         }
 
-        let d = f32_to_f16(all_max_abs / 31.0);
+        let d = f32_to_f16(if all_max_abs > 0.0 { all_max_abs / 31.0 } else { 0.0 });
 
         BlockQ3K {
             hmask,
