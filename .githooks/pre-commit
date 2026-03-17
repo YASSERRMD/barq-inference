@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -e
+
+echo "Running cargo fmt..."
+cargo fmt --all -- --check
+
+cargo clippy --all-targets
+
+echo "Pre-commit checks passed successfully!"

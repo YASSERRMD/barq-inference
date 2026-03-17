@@ -30,14 +30,7 @@ impl Default for GEMMConfig {
 }
 
 /// Optimized GEMM: C = A @ B where A is [M x K], B is [K x N], C is [M x N]
-pub fn gemm_f32(
-    a: &[f32],
-    b: &[f32],
-    c: &mut [f32],
-    m: usize,
-    n: usize,
-    k: usize,
-) -> Result<()> {
+pub fn gemm_f32(a: &[f32], b: &[f32], c: &mut [f32], m: usize, n: usize, k: usize) -> Result<()> {
     gemm_f32_with_config(a, b, c, m, n, k, &GEMMConfig::default())
 }
 
@@ -275,9 +268,7 @@ pub fn batch_gemm_f32(
     k: usize,
 ) -> Result<()> {
     if a_batch.len() != b_batch.len() || a_batch.len() != c_batch.len() {
-        return Err(crate::error::Error::tensor(
-            "Batch dimensions must match",
-        ));
+        return Err(crate::error::Error::tensor("Batch dimensions must match"));
     }
 
     for (i, (a, b)) in a_batch.iter().zip(b_batch.iter()).enumerate() {
@@ -293,8 +284,7 @@ mod tests {
 
     #[test]
     fn test_gemm_basic() {
-        let a = vec
-![1.0f32, 2.0, 3.0, 4.0]; // [2 x 2]
+        let a = vec![1.0f32, 2.0, 3.0, 4.0]; // [2 x 2]
         let b = vec![5.0f32, 6.0, 7.0, 8.0]; // [2 x 2]
         let mut c = vec![0.0f32; 4]; // [2 x 2]
 

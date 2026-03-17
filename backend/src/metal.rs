@@ -1,6 +1,5 @@
 //! Metal backend placeholder
 
-use barq_core::tensor::{Tensor, TensorType, Shape};
 use barq_core::error::{Error, Result};
 
 /// Metal backend (placeholder for future implementation)

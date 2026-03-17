@@ -2,16 +2,18 @@
 
 use crate::tokenizer::Tokenizer;
 use crate::vocab::{TokenizationResult, Vocab};
-use std::pin;
-use std::future;
-use std::marker;
-use async_trait::async_trait;
 use anyhow::Result;
-
+use async_trait::async_trait;
 
 /// Unigram tokenizer (T5)
 pub struct Unigram {
     vocab: Vocab,
+}
+
+impl Default for Unigram {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Unigram {

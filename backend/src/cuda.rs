@@ -1,6 +1,5 @@
 //! CUDA backend placeholder
 
-use barq_core::tensor::{Tensor, TensorType, Shape};
 use barq_core::error::{Error, Result};
 
 /// CUDA backend (placeholder for future implementation)

@@ -6,9 +6,9 @@
 //! - Cache statistics for monitoring
 //! - Efficient token management for long contexts
 
-use std::collections::VecDeque;
 use barq_core::error::{Error, Result};
-use barq_core::tensor::{Tensor, TensorType, TensorData, Shape};
+use barq_core::tensor::{Shape, Tensor, TensorData, TensorType};
+use std::collections::VecDeque;
 
 /// KV cache entry for a single token position
 #[derive(Debug, Clone)]
@@ -108,7 +108,9 @@ impl AdvancedKVCache {
         let v_shape = v.shape();
 
         if k_shape.dims().len() != 2 || v_shape.dims().len() != 2 {
-            return Err(Error::tensor("K and V must be 2D tensors [num_heads, head_dim]"));
+            return Err(Error::tensor(
+                "K and V must be 2D tensors [num_heads, head_dim]",
+            ));
         }
 
         if k_shape.dims()[0] != self.num_heads || k_shape.dims()[1] != self.head_dim {
@@ -124,11 +126,7 @@ impl AdvancedKVCache {
             // Update existing entry
             let physical_pos = self.logical_to_physical[pos].unwrap();
             if let Some(entry) = self.cache.get_mut(physical_pos) {
-                *entry = Some(KVCacheEntry {
-                    k,
-                    v,
-                    physical_pos,
-                });
+                *entry = Some(KVCacheEntry { k, v, physical_pos });
             }
         } else {
             // Insert new entry
@@ -138,15 +136,11 @@ impl AdvancedKVCache {
             }
 
             // Find empty slot
-            let physical_pos = self.find_free_slot().ok_or_else(|| {
-                Error::tensor("KV cache is full, cannot insert")
-            })?;
+            let physical_pos = self
+                .find_free_slot()
+                .ok_or_else(|| Error::tensor("KV cache is full, cannot insert"))?;
 
-            self.cache[physical_pos] = Some(KVCacheEntry {
-                k,
-                v,
-                physical_pos,
-            });
+            self.cache[physical_pos] = Some(KVCacheEntry { k, v, physical_pos });
 
             // Update mappings
             if pos >= self.logical_to_physical.len() {
@@ -341,11 +335,23 @@ mod tests {
     fn test_kv_cache_insert() {
         let mut cache = AdvancedKVCache::new(2, 4, 10);
 
-        let k_shape = Shape::new(&[2, 4]);
-        let v_shape = Shape::new(&[2, 4]);
+        let k_shape = Shape::new(vec![2, 4]);
+        let v_shape = Shape::new(vec![2, 4]);
 
-        let k = Tensor::new(None, TensorType::F32, k_shape, TensorData::F32(vec![1.0f32; 8])).unwrap();
-        let v = Tensor::new(None, TensorType::F32, v_shape, TensorData::F32(vec![2.0f32; 8])).unwrap();
+        let k = Tensor::new(
+            None,
+            TensorType::F32,
+            k_shape,
+            TensorData::F32(vec![1.0f32; 8]),
+        )
+        .unwrap();
+        let v = Tensor::new(
+            None,
+            TensorType::F32,
+            v_shape,
+            TensorData::F32(vec![2.0f32; 8]),
+        )
+        .unwrap();
 
         cache.insert(0, k, v).unwrap();
 
@@ -357,11 +363,23 @@ mod tests {
     fn test_kv_cache_get() {
         let mut cache = AdvancedKVCache::new(2, 4, 10);
 
-        let k_shape = Shape::new(&[2, 4]);
-        let v_shape = Shape::new(&[2, 4]);
+        let k_shape = Shape::new(vec![2, 4]);
+        let v_shape = Shape::new(vec![2, 4]);
 
-        let k = Tensor::new(None, TensorType::F32, k_shape, TensorData::F32(vec![1.0f32; 8])).unwrap();
-        let v = Tensor::new(None, TensorType::F32, v_shape, TensorData::F32(vec![2.0f32; 8])).unwrap();
+        let k = Tensor::new(
+            None,
+            TensorType::F32,
+            k_shape,
+            TensorData::F32(vec![1.0f32; 8]),
+        )
+        .unwrap();
+        let v = Tensor::new(
+            None,
+            TensorType::F32,
+            v_shape,
+            TensorData::F32(vec![2.0f32; 8]),
+        )
+        .unwrap();
 
         cache.insert(0, k.clone(), v.clone()).unwrap();
 
@@ -369,19 +387,31 @@ mod tests {
         assert!(result.is_some());
 
         let (retrieved_k, retrieved_v) = result.unwrap();
-        assert_eq!(retrieved_k.shape().dims, k.shape().dims);
-        assert_eq!(retrieved_v.shape().dims, v.shape().dims);
+        assert_eq!(retrieved_k.shape().dims(), k.shape().dims());
+        assert_eq!(retrieved_v.shape().dims(), v.shape().dims());
     }
 
     #[test]
     fn test_kv_cache_stats() {
         let mut cache = AdvancedKVCache::new(2, 4, 10);
 
-        let k_shape = Shape::new(&[2, 4]);
-        let v_shape = Shape::new(&[2, 4]);
+        let k_shape = Shape::new(vec![2, 4]);
+        let v_shape = Shape::new(vec![2, 4]);
 
-        let k = Tensor::new(None, TensorType::F32, k_shape, TensorData::F32(vec![1.0f32; 8])).unwrap();
-        let v = Tensor::new(None, TensorType::F32, v_shape, TensorData::F32(vec![2.0f32; 8])).unwrap();
+        let k = Tensor::new(
+            None,
+            TensorType::F32,
+            k_shape,
+            TensorData::F32(vec![1.0f32; 8]),
+        )
+        .unwrap();
+        let v = Tensor::new(
+            None,
+            TensorType::F32,
+            v_shape,
+            TensorData::F32(vec![2.0f32; 8]),
+        )
+        .unwrap();
 
         cache.insert(0, k, v).unwrap();
         cache.get(0).unwrap();
@@ -397,11 +427,23 @@ mod tests {
     fn test_kv_cache_clear() {
         let mut cache = AdvancedKVCache::new(2, 4, 10);
 
-        let k_shape = Shape::new(&[2, 4]);
-        let v_shape = Shape::new(&[2, 4]);
+        let k_shape = Shape::new(vec![2, 4]);
+        let v_shape = Shape::new(vec![2, 4]);
 
-        let k = Tensor::new(None, TensorType::F32, k_shape, TensorData::F32(vec![1.0f32; 8])).unwrap();
-        let v = Tensor::new(None, TensorType::F32, v_shape, TensorData::F32(vec![2.0f32; 8])).unwrap();
+        let k = Tensor::new(
+            None,
+            TensorType::F32,
+            k_shape,
+            TensorData::F32(vec![1.0f32; 8]),
+        )
+        .unwrap();
+        let v = Tensor::new(
+            None,
+            TensorType::F32,
+            v_shape,
+            TensorData::F32(vec![2.0f32; 8]),
+        )
+        .unwrap();
 
         cache.insert(0, k, v).unwrap();
         cache.clear();

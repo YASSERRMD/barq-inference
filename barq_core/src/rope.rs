@@ -9,7 +9,7 @@ pub fn rope(
     freq_base: f32,
     scale: f32,
 ) -> Result<(Vec<f32>, Vec<f32>)> {
-    if dim % 2 != 0 {
+    if !dim.is_multiple_of(2) {
         return Err(Error::tensor("RoPE dimension must be even"));
     }
 
@@ -51,7 +51,8 @@ pub fn apply_rope(
     if cos.len() != seq_len * (dim / 2) || sin.len() != seq_len * (dim / 2) {
         return Err(Error::tensor(format!(
             "Cos/sin size mismatch: expected {}, got {}",
-            seq_len * (dim / 2), cos.len()
+            seq_len * (dim / 2),
+            cos.len()
         )));
     }
 
@@ -93,8 +94,8 @@ mod tests {
 
         let (cos, sin) = rope(&positions, dim, 10000.0, 1.0).unwrap();
 
-        assert_eq!(cos.len(), positions.len() * dim);
-        assert_eq!(sin.len(), positions.len() * dim);
+        assert_eq!(cos.len(), positions.len() * (dim / 2));
+        assert_eq!(sin.len(), positions.len() * (dim / 2));
 
         // Check that cos^2 + sin^2 = 1
         for i in 0..cos.len() {

@@ -2,15 +2,18 @@
 
 use crate::tokenizer::Tokenizer;
 use crate::vocab::{TokenizationResult, Vocab};
-use std::pin;
-use std::future;
-use std::marker;
-use async_trait::async_trait;
 use anyhow::Result;
+use async_trait::async_trait;
 
 /// SentencePiece tokenizer (LLaMA, Mistral, etc.)
 pub struct SentencePiece {
     vocab: Vocab,
+}
+
+impl Default for SentencePiece {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl SentencePiece {

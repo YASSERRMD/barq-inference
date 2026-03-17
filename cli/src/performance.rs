@@ -104,34 +104,34 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_cuda_graphs_enable() {
+    fn test_performance_all_presets() {
+        // Note: These tests manipulate global environment variables and must run sequentially.
+        // Combining them into one test function ensures they don't race.
+
+        // Test basic toggles
         enable_cuda_graphs(true);
         assert!(cuda_graphs_enabled());
-
         enable_cuda_graphs(false);
         assert!(!cuda_graphs_enabled());
-    }
 
-    #[test]
-    fn test_flash_attention_enable() {
         enable_flash_attention(true);
         assert!(flash_attention_enabled());
-
         enable_flash_attention(false);
         assert!(!flash_attention_enabled());
-    }
 
-    #[test]
-    fn test_performance_preset_max_speed() {
+        // Test MaxSpeed preset
         PerformancePreset::MaxSpeed.apply();
         assert!(cuda_graphs_enabled());
         assert!(flash_attention_enabled());
-    }
 
-    #[test]
-    fn test_performance_preset_cpu() {
+        // Test CPU preset
         PerformancePreset::CPU.apply();
         assert!(!cuda_graphs_enabled());
         assert!(!flash_attention_enabled());
+
+        // Test MaxQuality preset
+        PerformancePreset::MaxQuality.apply();
+        assert!(!cuda_graphs_enabled());
+        assert!(flash_attention_enabled());
     }
 }

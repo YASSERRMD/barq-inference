@@ -7,10 +7,10 @@
 //! - SwiGLU feed-forward network
 //! - Layer stacking
 
-use std::sync::Arc;
-use crate::loader::Model;
 use crate::context::KVCache;
+use crate::loader::Model;
 use barq_core::error::{Error, Result};
+use std::sync::Arc;
 
 /// LLaMA transformer forward pass
 pub struct LlamaTransformer {
@@ -45,11 +45,7 @@ impl LlamaTransformer {
     }
 
     /// Forward pass through all transformer layers
-    pub fn forward(
-        &self,
-        tokens: &[i32],
-        kv_cache: &mut KVCache,
-    ) -> Result<Vec<f32>> {
+    pub fn forward(&self, tokens: &[i32], kv_cache: &mut KVCache) -> Result<Vec<f32>> {
         // Get embedding matrix
         let embeddings = self.get_embeddings(tokens)?;
 
@@ -66,7 +62,9 @@ impl LlamaTransformer {
 
     /// Get token embeddings
     fn get_embeddings(&self, tokens: &[i32]) -> Result<Vec<f32>> {
-        let tok_emb = self.model.get_tensor_blocking("token_embd.weight")
+        let tok_emb = self
+            .model
+            .get_tensor_blocking("token_embd.weight")
             .ok_or_else(|| Error::tensor("token_embd.weight not found"))?;
 
         let emb_data = tok_emb.as_f32_slice()?.to_vec();
@@ -174,14 +172,22 @@ impl LlamaTransformer {
         let k_rope = self.apply_rope(&k_heads, seq_len)?;
 
         // Compute attention scores and output
-        let attn_out = self.compute_attention(&q_rope, &k_rope, &v_heads, n_head, n_head_kv, head_dim, seq_len)?;
+        let attn_out = self.compute_attention(
+            &q_rope, &k_rope, &v_heads, n_head, n_head_kv, head_dim, seq_len,
+        )?;
 
         // Project output
         self.output_proj(&attn_out, layer_idx)
     }
 
     /// Project to Q, K, or V
-    fn project_qkv(&self, hidden: &[f32], layer: usize, typ: &str, out_dim: usize) -> Result<Vec<f32>> {
+    fn project_qkv(
+        &self,
+        hidden: &[f32],
+        layer: usize,
+        typ: &str,
+        out_dim: usize,
+    ) -> Result<Vec<f32>> {
         let weight_name = format!("blk.{}.attn_{}.weight", layer, typ);
         let weight = self.model.get_tensor_blocking(&weight_name);
 
@@ -194,12 +200,12 @@ impl LlamaTransformer {
         let seq_len = hidden.len() / n_embd;
         let mut output = vec![0.0; seq_len * out_dim];
 
-        // Simplified matrix multiplication
+        // Matrix multiplication: [seq_len, n_embd] * [out_dim, n_embd]^T
         for i in 0..seq_len {
             for j in 0..out_dim {
                 let mut sum = 0.0;
                 for k in 0..n_embd {
-                    sum += hidden[i * n_embd + k] * weight_data[k * out_dim + j];
+                    sum += hidden[i * n_embd + k] * weight_data[j * n_embd + k];
                 }
                 output[i * out_dim + j] = sum;
             }
@@ -209,7 +215,13 @@ impl LlamaTransformer {
     }
 
     /// Reshape to multi-head format
-    fn reshape_to_heads(&self, data: &[f32], seq_len: usize, n_heads: usize, head_dim: usize) -> Result<Vec<Vec<f32>>> {
+    fn reshape_to_heads(
+        &self,
+        data: &[f32],
+        seq_len: usize,
+        n_heads: usize,
+        head_dim: usize,
+    ) -> Result<Vec<Vec<f32>>> {
         let mut heads = Vec::with_capacity(n_heads);
 
         for h in 0..n_heads {
@@ -250,7 +262,11 @@ impl LlamaTransformer {
                     // Apply RoPE (simplified - using only even/odd positions)
                     if i % 2 == 0 && i + 1 < head_dim {
                         let next_idx = idx + 1;
-                        let next_val = if next_idx < head.len() { head[next_idx] } else { 0.0 };
+                        let next_val = if next_idx < head.len() {
+                            head[next_idx]
+                        } else {
+                            0.0
+                        };
 
                         // Compute rotation
                         let theta = 10000.0_f32.powf(-(i as f32) / head_dim as f32);
@@ -312,9 +328,15 @@ impl LlamaTransformer {
                 }
 
                 // Softmax
-                let max_weight = attn_weights.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+                let max_weight = attn_weights
+                    .iter()
+                    .cloned()
+                    .fold(f32::NEG_INFINITY, f32::max);
                 let exp_sum: f32 = attn_weights.iter().map(|&w| (w - max_weight).exp()).sum();
-                let probs: Vec<f32> = attn_weights.iter().map(|&w| ((w - max_weight).exp()) / exp_sum).collect();
+                let probs: Vec<f32> = attn_weights
+                    .iter()
+                    .map(|&w| ((w - max_weight).exp()) / exp_sum)
+                    .collect();
 
                 // Weighted sum of values
                 for d in 0..head_dim {
@@ -384,7 +406,13 @@ impl LlamaTransformer {
     }
 
     /// FFN projection
-    fn _ffn_projection(&self, hidden: &[f32], layer: usize, typ: &str, out_dim: usize) -> Result<Vec<f32>> {
+    fn _ffn_projection(
+        &self,
+        hidden: &[f32],
+        layer: usize,
+        typ: &str,
+        out_dim: usize,
+    ) -> Result<Vec<f32>> {
         let weight_name = format!("blk.{}.ffn_{}.weight", layer, typ);
         let weight = self.model.get_tensor_blocking(&weight_name);
 
@@ -397,12 +425,12 @@ impl LlamaTransformer {
         let seq_len = hidden.len() / n_embd;
         let mut output = vec![0.0; seq_len * out_dim];
 
-        // Simplified matrix multiplication
+        // Matrix multiplication: [seq_len, n_embd] * [out_dim, n_embd]^T
         for i in 0..seq_len {
             for j in 0..out_dim {
                 let mut sum = 0.0;
                 for k in 0..n_embd {
-                    sum += hidden[i * n_embd + k] * weight_data[k * out_dim + j];
+                    sum += hidden[i * n_embd + k] * weight_data[j * n_embd + k];
                 }
                 output[i * out_dim + j] = sum;
             }
@@ -459,7 +487,6 @@ impl LlamaTransformer {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
 
     #[test]
     fn test_llama_transformer_creation() {

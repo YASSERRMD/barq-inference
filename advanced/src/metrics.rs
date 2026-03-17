@@ -5,7 +5,7 @@
 
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use serde::Serialize;
 
@@ -73,9 +73,12 @@ impl InferenceMetrics {
 
     pub fn record_success(&self, prompt_tokens: usize, generated_tokens: usize, duration_ms: u64) {
         self.successful_requests.fetch_add(1, Ordering::Relaxed);
-        self.total_tokens_generated.fetch_add(generated_tokens as u64, Ordering::Relaxed);
-        self.total_prompt_tokens.fetch_add(prompt_tokens as u64, Ordering::Relaxed);
-        self.total_inference_time_ms.fetch_add(duration_ms, Ordering::Relaxed);
+        self.total_tokens_generated
+            .fetch_add(generated_tokens as u64, Ordering::Relaxed);
+        self.total_prompt_tokens
+            .fetch_add(prompt_tokens as u64, Ordering::Relaxed);
+        self.total_inference_time_ms
+            .fetch_add(duration_ms, Ordering::Relaxed);
     }
 
     pub fn record_failure(&self) {
@@ -104,10 +107,10 @@ impl InferenceMetrics {
         }
     }
 
-    // TODO: Implement proper JSON export (AtomicU64 doesn't implement Serialize)
-    // pub fn export_json(&self) -> Result<String, serde_json::Error> {
-    //     serde_json::to_string(self)
-    // }
+    /// Implement proper JSON export (AtomicU64 doesn't implement Serialize)
+    pub fn export_json(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string(&self.snapshot())
+    }
 }
 
 impl Default for InferenceMetrics {
@@ -123,11 +126,15 @@ pub struct RequestGuard {
 }
 
 impl RequestGuard {
-    pub fn complete(mut self, prompt_tokens: usize, generated_tokens: usize) {
+    pub fn complete(self, prompt_tokens: usize, generated_tokens: usize) {
         if let Some(weak) = &self.metrics {
             if let Some(metrics) = weak.upgrade() {
                 let duration = self.start.elapsed();
-                metrics.record_success(prompt_tokens, generated_tokens, duration.as_millis() as u64);
+                metrics.record_success(
+                    prompt_tokens,
+                    generated_tokens,
+                    duration.as_millis() as u64,
+                );
             }
         }
     }
@@ -204,8 +211,6 @@ impl InferenceMetrics {
 
 /// Get process uptime in seconds
 fn get_process_uptime() -> f64 {
-    use std::time::Instant;
-
     // This would need to be stored at application start
     // For now, return a placeholder
     0.0
@@ -268,7 +273,11 @@ impl ContextManager {
         }
     }
 
-    pub fn with_thresholds(capacity: usize, degraded_threshold: f32, critical_threshold: f32) -> Self {
+    pub fn with_thresholds(
+        capacity: usize,
+        degraded_threshold: f32,
+        critical_threshold: f32,
+    ) -> Self {
         Self {
             current_tokens: 0,
             capacity,
@@ -312,7 +321,8 @@ impl ContextManager {
 
     pub fn reset(&mut self) {
         self.current_tokens = 0;
-        self.reset_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.reset_count
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
     pub fn reset_count(&self) -> u64 {
@@ -347,13 +357,17 @@ mod tests {
         assert_eq!(metrics.successful_requests.load(Ordering::Relaxed), 1);
         assert_eq!(metrics.total_tokens_generated.load(Ordering::Relaxed), 20);
         assert_eq!(metrics.total_prompt_tokens.load(Ordering::Relaxed), 10);
-        assert_eq!(metrics.total_inference_time_ms.load(Ordering::Relaxed), 1000);
+        assert_eq!(
+            metrics.total_inference_time_ms.load(Ordering::Relaxed),
+            1000
+        );
     }
 
     #[test]
     fn test_metrics_success_rate() {
         let metrics = InferenceMetrics::new();
 
+        metrics.total_requests.fetch_add(3, Ordering::Relaxed);
         metrics.record_success(10, 20, 1000);
         metrics.record_success(10, 20, 1000);
         metrics.record_failure();
@@ -399,7 +413,7 @@ mod tests {
     fn test_context_manager_thresholds() {
         let mut manager = ContextManager::with_thresholds(10000, 0.5, 0.8);
 
-        manager.update_tokens(4000);
+        manager.update_tokens(6000);
         assert_eq!(manager.check_health(), ContextHealth::Degraded);
 
         manager.update_tokens(9000);
