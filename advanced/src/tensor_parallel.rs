@@ -8,8 +8,8 @@ use std::sync::Arc;
 
 use tokio::sync::RwLock;
 
-use barq_core::tensor::{Tensor, TensorType, Shape};
 use barq_core::error::{Error, Result};
+use barq_core::tensor::{Shape, Tensor};
 
 /// Device ID type
 pub type DeviceId = usize;
@@ -80,7 +80,7 @@ impl TensorParallel {
         let n_devices = self.config.n_devices;
         let dim_size = dims[dim];
 
-        if dim_size % n_devices != 0 {
+        if !dim_size.is_multiple_of(n_devices) {
             return Err(Error::tensor(format!(
                 "Dimension {} (size {}) not divisible by n_devices {}",
                 dim, dim_size, n_devices
@@ -112,7 +112,9 @@ impl TensorParallel {
             return Ok(tensor.clone());
         }
 
-        Err(Error::Unsupported("All-reduce not yet implemented".to_string()))
+        Err(Error::Unsupported(
+            "All-reduce not yet implemented".to_string(),
+        ))
     }
 
     /// Broadcast a tensor from device 0 to all devices

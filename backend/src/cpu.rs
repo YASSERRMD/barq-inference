@@ -4,10 +4,10 @@ use std::sync::Arc;
 
 use rayon::prelude::*;
 
+use crate::buffer::{Buffer, CpuBuffer};
 use crate::device::CpuDevice;
-use crate::buffer::{CpuBuffer, Buffer};
-use barq_core::tensor::{Tensor, TensorType, Shape};
 use barq_core::error::{Error, Result};
+use barq_core::tensor::TensorType;
 
 /// CPU backend
 pub struct CpuBackend {
@@ -42,16 +42,21 @@ impl CpuBackend {
 
     /// Allocate a buffer on the CPU
     pub fn allocate(&self, dtype: TensorType, size: usize) -> Result<CpuBuffer> {
-        Ok(CpuBuffer::new(crate::buffer::BufferType::ReadWrite, dtype, size))
+        Ok(CpuBuffer::new(
+            crate::buffer::BufferType::ReadWrite,
+            dtype,
+            size,
+        ))
     }
 
     /// Copy data to CPU buffer
     pub fn copy_to_buffer(&self, data: &[u8], buffer: &mut CpuBuffer) -> Result<()> {
         if data.len() > buffer.size() {
-            return Err(Error::Allocation(
-                format!("Data size ({} bytes) exceeds buffer size ({} bytes)",
-                       data.len(), buffer.size())
-            ));
+            return Err(Error::Allocation(format!(
+                "Data size ({} bytes) exceeds buffer size ({} bytes)",
+                data.len(),
+                buffer.size()
+            )));
         }
 
         let buffer_data = buffer.data_mut();

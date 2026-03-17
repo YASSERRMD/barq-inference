@@ -3,8 +3,8 @@
 //! This module provides a comprehensive set of tensor operations optimized
 //! for performance with SIMD support where applicable.
 
-use crate::tensor::{Tensor, TensorType, Shape};
 use crate::error::{Error, Result};
+use crate::tensor::{Shape, Tensor, TensorType};
 
 /// Trait for unary tensor operations
 pub trait UnaryOp {
@@ -24,15 +24,17 @@ impl BinaryOp for Add {
     fn apply(&self, lhs: &Tensor, rhs: &Tensor) -> Result<Tensor> {
         // Check shapes are compatible
         if !lhs.shape().is_broadcastable_to(rhs.shape()) {
-            return Err(Error::dimension_mismatch(
-                format!("Cannot add {:?} and {:?}", lhs.shape(), rhs.shape())
-            ));
+            return Err(Error::dimension_mismatch(format!(
+                "Cannot add {:?} and {:?}",
+                lhs.shape(),
+                rhs.shape()
+            )));
         }
 
         // For now, only implement same-shape addition
         if lhs.shape() != rhs.shape() {
             return Err(Error::Unsupported(
-                "Broadcasting not yet implemented".to_string()
+                "Broadcasting not yet implemented".to_string(),
             ));
         }
 
@@ -41,7 +43,8 @@ impl BinaryOp for Add {
                 let lhs_data = lhs.as_f32_slice()?;
                 let rhs_data = rhs.as_f32_slice()?;
 
-                let result: Vec<f32> = lhs_data.iter()
+                let result: Vec<f32> = lhs_data
+                    .iter()
                     .zip(rhs_data.iter())
                     .map(|(a, b)| a + b)
                     .collect();
@@ -53,9 +56,11 @@ impl BinaryOp for Add {
                     crate::tensor::TensorData::F32(result),
                 )
             }
-            _ => Err(Error::Unsupported(
-                format!("Add not implemented for {} + {}", lhs.dtype(), rhs.dtype())
-            ))
+            _ => Err(Error::Unsupported(format!(
+                "Add not implemented for {} + {}",
+                lhs.dtype(),
+                rhs.dtype()
+            ))),
         }
     }
 }
@@ -75,9 +80,10 @@ impl BinaryOp for MatMul {
 
         // Check dimensions: (M, K) @ (K, N) = (M, N)
         if lhs_shape[1] != rhs_shape[0] {
-            return Err(Error::dimension_mismatch(
-                format!("Cannot multiply {:?} by {:?}", lhs_shape, rhs_shape)
-            ));
+            return Err(Error::dimension_mismatch(format!(
+                "Cannot multiply {:?} by {:?}",
+                lhs_shape, rhs_shape
+            )));
         }
 
         let m = lhs_shape[0];
@@ -97,8 +103,8 @@ impl BinaryOp for MatMul {
                         let mut sum = 0.0f32;
                         for l in 0..k {
                             sum += unsafe {
-                                *lhs_data.get_unchecked(i * k + l) *
-                                *rhs_data.get_unchecked(l * n + j)
+                                *lhs_data.get_unchecked(i * k + l)
+                                    * *rhs_data.get_unchecked(l * n + j)
                             };
                         }
                         result[i * n + j] = sum;
@@ -112,9 +118,11 @@ impl BinaryOp for MatMul {
                     crate::tensor::TensorData::F32(result),
                 )
             }
-            _ => Err(Error::Unsupported(
-                format!("MatMul not implemented for {} x {}", lhs.dtype(), rhs.dtype())
-            ))
+            _ => Err(Error::Unsupported(format!(
+                "MatMul not implemented for {} x {}",
+                lhs.dtype(),
+                rhs.dtype()
+            ))),
         }
     }
 }
@@ -137,9 +145,10 @@ impl UnaryOp for Relu {
                     crate::tensor::TensorData::F32(result),
                 )
             }
-            _ => Err(Error::Unsupported(
-                format!("ReLU not implemented for {}", input.dtype())
-            ))
+            _ => Err(Error::Unsupported(format!(
+                "ReLU not implemented for {}",
+                input.dtype()
+            ))),
         }
     }
 }
@@ -155,9 +164,10 @@ impl UnaryOp for Gelu {
                 let data = input.as_f32_slice()?;
                 const GELU_CONST: f32 = 0.044715;
 
-                let result: Vec<f32> = data.iter().map(|&x| {
-                    0.5 * x * (1.0 + (x * GELU_CONST * x * x).tanh())
-                }).collect();
+                let result: Vec<f32> = data
+                    .iter()
+                    .map(|&x| 0.5 * x * (1.0 + (x * GELU_CONST * x * x).tanh()))
+                    .collect();
 
                 Tensor::new(
                     input.name().map(|s| s.to_string()),
@@ -166,9 +176,10 @@ impl UnaryOp for Gelu {
                     crate::tensor::TensorData::F32(result),
                 )
             }
-            _ => Err(Error::Unsupported(
-                format!("GELU not implemented for {}", input.dtype())
-            ))
+            _ => Err(Error::Unsupported(format!(
+                "GELU not implemented for {}",
+                input.dtype()
+            ))),
         }
     }
 }
@@ -182,9 +193,7 @@ impl UnaryOp for Silu {
         match input.dtype() {
             TensorType::F32 => {
                 let data = input.as_f32_slice()?;
-                let result: Vec<f32> = data.iter().map(|&x| {
-                    x / (1.0 + (-x).exp())
-                }).collect();
+                let result: Vec<f32> = data.iter().map(|&x| x / (1.0 + (-x).exp())).collect();
 
                 Tensor::new(
                     input.name().map(|s| s.to_string()),
@@ -193,9 +202,10 @@ impl UnaryOp for Silu {
                     crate::tensor::TensorData::F32(result),
                 )
             }
-            _ => Err(Error::Unsupported(
-                format!("SiLU not implemented for {}", input.dtype())
-            ))
+            _ => Err(Error::Unsupported(format!(
+                "SiLU not implemented for {}",
+                input.dtype()
+            ))),
         }
     }
 }
@@ -212,14 +222,16 @@ mod tests {
             TensorType::F32,
             Shape::matrix(2, 2),
             TensorData::F32(vec![1.0, 2.0, 3.0, 4.0]),
-        ).unwrap();
+        )
+        .unwrap();
 
         let b = Tensor::new(
             None,
             TensorType::F32,
             Shape::matrix(2, 2),
             TensorData::F32(vec![5.0, 6.0, 7.0, 8.0]),
-        ).unwrap();
+        )
+        .unwrap();
 
         let op = Add;
         let result = op.apply(&a, &b).unwrap();
@@ -234,14 +246,16 @@ mod tests {
             TensorType::F32,
             Shape::matrix(2, 3),
             TensorData::F32(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]),
-        ).unwrap();
+        )
+        .unwrap();
 
         let b = Tensor::new(
             None,
             TensorType::F32,
             Shape::matrix(3, 2),
             TensorData::F32(vec![7.0, 8.0, 9.0, 10.0, 11.0, 12.0]),
-        ).unwrap();
+        )
+        .unwrap();
 
         let op = MatMul;
         let result = op.apply(&a, &b).unwrap();
@@ -259,7 +273,8 @@ mod tests {
             TensorType::F32,
             Shape::vector(4),
             TensorData::F32(vec![-1.0, 0.0, 1.0, 2.0]),
-        ).unwrap();
+        )
+        .unwrap();
 
         let op = Relu;
         let result = op.apply(&a).unwrap();

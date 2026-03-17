@@ -1,9 +1,8 @@
 //! Feed-forward network implementation
 
-use barq_core::tensor::{Tensor, TensorType, Shape, TensorData};
 use barq_core::error::{Error, Result};
-use barq_core::ops::{MatMul, Add, BinaryOp};
-use barq_core::normalization;
+use barq_core::ops::{BinaryOp, MatMul};
+use barq_core::tensor::{Tensor, TensorData, TensorType};
 
 /// Feed-forward network (MLP)
 pub struct FeedForward {
@@ -49,9 +48,7 @@ impl FeedForward {
         match x.dtype() {
             TensorType::F32 => {
                 let data = x.as_f32_slice()?;
-                let result: Vec<f32> = data.iter().map(|&v| {
-                    v / (1.0 + (-v).exp())
-                }).collect();
+                let result: Vec<f32> = data.iter().map(|&v| v / (1.0 + (-v).exp())).collect();
 
                 Tensor::new(
                     None,
@@ -60,20 +57,29 @@ impl FeedForward {
                     TensorData::F32(result),
                 )
             }
-            _ => Err(Error::Unsupported(format!("SiLU not implemented for {:?}", x.dtype()))),
+            _ => Err(Error::Unsupported(format!(
+                "SiLU not implemented for {:?}",
+                x.dtype()
+            ))),
         }
     }
 
     fn mul(&self, a: &Tensor, b: &Tensor) -> Result<Tensor> {
         if a.shape() != b.shape() {
-            return Err(Error::tensor("Shape mismatch for element-wise multiplication"));
+            return Err(Error::tensor(
+                "Shape mismatch for element-wise multiplication",
+            ));
         }
 
         match (a.dtype(), b.dtype()) {
             (TensorType::F32, TensorType::F32) => {
                 let a_data = a.as_f32_slice()?;
                 let b_data = b.as_f32_slice()?;
-                let result: Vec<f32> = a_data.iter().zip(b_data.iter()).map(|(x, y)| x * y).collect();
+                let result: Vec<f32> = a_data
+                    .iter()
+                    .zip(b_data.iter())
+                    .map(|(x, y)| x * y)
+                    .collect();
 
                 Tensor::new(
                     None,
@@ -82,7 +88,9 @@ impl FeedForward {
                     TensorData::F32(result),
                 )
             }
-            _ => Err(Error::Unsupported("Mul not implemented for non-f32 types".to_string())),
+            _ => Err(Error::Unsupported(
+                "Mul not implemented for non-f32 types".to_string(),
+            )),
         }
     }
 }

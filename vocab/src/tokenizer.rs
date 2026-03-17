@@ -1,8 +1,5 @@
 //! Tokenizer trait and common implementations
 
-use std::pin;
-use std::future;
-use std::marker;
 use async_trait::async_trait;
 
 use crate::vocab::{TokenizationResult, Vocab, VocabType};
@@ -44,6 +41,12 @@ pub enum TokenizerType {
 /// Simple whitespace tokenizer for testing
 pub struct WhitespaceTokenizer {
     vocab: Vocab,
+}
+
+impl Default for WhitespaceTokenizer {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl WhitespaceTokenizer {
@@ -100,13 +103,14 @@ impl Tokenizer for WhitespaceTokenizer {
     }
 
     async fn decode(&self, ids: &[u32]) -> Result<String> {
-        let words: Vec<&str> = ids.iter().filter_map(|&id| {
-            match id {
+        let words: Vec<&str> = ids
+            .iter()
+            .filter_map(|&id| match id {
                 0 => Some("<bos>"),
                 1 => Some("<eos>"),
                 _ => Some("word"),
-            }
-        }).collect();
+            })
+            .collect();
 
         Ok(words.join(" "))
     }

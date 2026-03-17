@@ -76,6 +76,12 @@ pub struct SharedSamplerChain {
     chain: Arc<Mutex<SamplerChain>>,
 }
 
+impl Default for SharedSamplerChain {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SharedSamplerChain {
     pub fn new() -> Self {
         Self {

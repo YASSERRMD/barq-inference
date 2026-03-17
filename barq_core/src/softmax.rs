@@ -1,7 +1,7 @@
 //! Softmax implementation
 
-use crate::tensor::{Tensor, TensorType, Shape, TensorData};
 use crate::error::{Error, Result};
+use crate::tensor::{Shape, Tensor, TensorData, TensorType};
 
 pub fn softmax(logits: &[f32]) -> Result<Vec<f32>> {
     if logits.is_empty() {
@@ -58,7 +58,7 @@ mod tests {
 
         // Check all values are in [0, 1]
         for &p in &result {
-            assert!(p >= 0.0 && p <= 1.0);
+            assert!((0.0..=1.0).contains(&p));
         }
 
         // Check ordering is preserved

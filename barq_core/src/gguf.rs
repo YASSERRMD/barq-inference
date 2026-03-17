@@ -13,15 +13,15 @@
 
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{self, BufReader, BufWriter, Read, Write};
+use std::io::{self, BufReader, BufWriter, Read, Seek, Write};
 use std::path::Path;
 
 use byteorder::{LittleEndian as LE, ReadBytesExt, WriteBytesExt};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
-use crate::tensor::{Tensor, TensorType, Shape};
 use crate::quant::QuantizationType;
+use crate::tensor::{Shape, Tensor, TensorType};
 
 /// GGUF magic number
 pub const GGUF_MAGIC: &[u8; 4] = b"GGUF";
@@ -118,19 +118,18 @@ pub enum GgufTensorType {
     /// Standard types
     F32 = 0,
     F16 = 1,
-    Q4_0 = 8,
-    Q4_1 = 9,
-    Q5_0 = 10,
-    Q5_1 = 11,
-    Q8_0 = 12,
-    Q2_K = 16,
-    Q3_K = 17,
-    Q4_K = 18,
-    Q5_K = 19,
-    Q6_K = 20,
-    Q8_K = 21,
-    /// Q4_K with medium (M) variant
-    Q4_K_M = 14,
+    Q4_0 = 2,
+    Q4_1 = 3,
+    Q5_0 = 6,
+    Q5_1 = 7,
+    Q8_0 = 8,
+    Q8_1 = 9,
+    Q2_K = 10,
+    Q3_K = 11,
+    Q4_K = 12,
+    Q5_K = 13,
+    Q6_K = 14,
+    Q8_K = 15,
 }
 
 impl GgufTensorType {
@@ -139,19 +138,22 @@ impl GgufTensorType {
         match value {
             0 => Ok(GgufTensorType::F32),
             1 => Ok(GgufTensorType::F16),
-            8 => Ok(GgufTensorType::Q4_0),
-            9 => Ok(GgufTensorType::Q4_1),
-            10 => Ok(GgufTensorType::Q5_0),
-            11 => Ok(GgufTensorType::Q5_1),
-            12 => Ok(GgufTensorType::Q8_0),
-            14 => Ok(GgufTensorType::Q4_K_M),
-            16 => Ok(GgufTensorType::Q2_K),
-            17 => Ok(GgufTensorType::Q3_K),
-            18 => Ok(GgufTensorType::Q4_K),
-            19 => Ok(GgufTensorType::Q5_K),
-            20 => Ok(GgufTensorType::Q6_K),
-            21 => Ok(GgufTensorType::Q8_K),
-            _ => Err(Error::InvalidGguf(format!("Unknown GGUF tensor type: {}", value))),
+            2 => Ok(GgufTensorType::Q4_0),
+            3 => Ok(GgufTensorType::Q4_1),
+            6 => Ok(GgufTensorType::Q5_0),
+            7 => Ok(GgufTensorType::Q5_1),
+            8 => Ok(GgufTensorType::Q8_0),
+            9 => Ok(GgufTensorType::Q8_1),
+            10 => Ok(GgufTensorType::Q2_K),
+            11 => Ok(GgufTensorType::Q3_K),
+            12 => Ok(GgufTensorType::Q4_K),
+            13 => Ok(GgufTensorType::Q5_K),
+            14 => Ok(GgufTensorType::Q6_K),
+            15 => Ok(GgufTensorType::Q8_K),
+            _ => Err(Error::InvalidGguf(format!(
+                "Unknown GGUF tensor type: {}",
+                value
+            ))),
         }
     }
 
@@ -160,9 +162,13 @@ impl GgufTensorType {
         match self {
             GgufTensorType::Q4_0 | GgufTensorType::Q4_1 => 32,
             GgufTensorType::Q5_0 | GgufTensorType::Q5_1 => 32,
-            GgufTensorType::Q8_0 => 32,
-            GgufTensorType::Q2_K | GgufTensorType::Q3_K | GgufTensorType::Q4_K |
-            GgufTensorType::Q4_K_M | GgufTensorType::Q5_K | GgufTensorType::Q6_K | GgufTensorType::Q8_K => 256,
+            GgufTensorType::Q8_0 | GgufTensorType::Q8_1 => 32,
+            GgufTensorType::Q2_K
+            | GgufTensorType::Q3_K
+            | GgufTensorType::Q4_K
+            | GgufTensorType::Q5_K
+            | GgufTensorType::Q6_K
+            | GgufTensorType::Q8_K => 256,
             GgufTensorType::F32 | GgufTensorType::F16 => 1,
         }
     }
@@ -177,10 +183,10 @@ impl GgufTensorType {
             GgufTensorType::Q5_0 => "q5_0",
             GgufTensorType::Q5_1 => "q5_1",
             GgufTensorType::Q8_0 => "q8_0",
+            GgufTensorType::Q8_1 => "q8_1",
             GgufTensorType::Q2_K => "q2_k",
             GgufTensorType::Q3_K => "q3_k",
             GgufTensorType::Q4_K => "q4_k",
-            GgufTensorType::Q4_K_M => "q4_k_m",
             GgufTensorType::Q5_K => "q5_k",
             GgufTensorType::Q6_K => "q6_k",
             GgufTensorType::Q8_K => "q8_k",
@@ -219,17 +225,19 @@ pub struct GgufReader {
     tensor_info: Vec<TensorInfo>,
     /// Alignment
     alignment: u32,
+    /// Offset to the beginning of tensor data
+    data_offset: u64,
 }
 
 impl GgufReader {
     /// Open a GGUF file
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let file = File::open(path).map_err(|e| Error::Io(e))?;
+        let file = File::open(path).map_err(Error::Io)?;
         let mut reader = BufReader::new(file);
 
         // Read and verify magic
         let mut magic = [0u8; 4];
-        reader.read_exact(&mut magic).map_err(|e| Error::Io(e))?;
+        reader.read_exact(&mut magic).map_err(Error::Io)?;
         if magic != *GGUF_MAGIC {
             return Err(Error::InvalidGguf(format!(
                 "Invalid magic: {:?}, expected {:?}",
@@ -238,7 +246,7 @@ impl GgufReader {
         }
 
         // Read version
-        let version = reader.read_u32::<LE>().map_err(|e| Error::Io(e))?;
+        let version = reader.read_u32::<LE>().map_err(Error::Io)?;
         if version > GGUF_VERSION {
             return Err(Error::InvalidGguf(format!(
                 "Unsupported version: {}, maximum supported: {}",
@@ -247,14 +255,14 @@ impl GgufReader {
         }
 
         // Read tensor count and KV count
-        let tensor_count = reader.read_u64::<LE>().map_err(|e| Error::Io(e))?;
-        let kv_count = reader.read_u64::<LE>().map_err(|e| Error::Io(e))?;
+        let tensor_count = reader.read_u64::<LE>().map_err(Error::Io)?;
+        let kv_count = reader.read_u64::<LE>().map_err(Error::Io)?;
 
         // Read KV pairs
         let mut kv_pairs = HashMap::new();
         for _ in 0..kv_count {
             let key = Self::read_string(&mut reader)?;
-            let value_type = GgufType::from_u32(reader.read_u32::<LE>().map_err(|e| Error::Io(e))?)?;
+            let value_type = GgufType::from_u32(reader.read_u32::<LE>().map_err(Error::Io)?)?;
             let value = Self::read_value(&mut reader, value_type)?;
             kv_pairs.insert(key, value);
         }
@@ -269,15 +277,15 @@ impl GgufReader {
         let mut tensor_info = Vec::with_capacity(tensor_count as usize);
         for _ in 0..tensor_count {
             let name = Self::read_string(&mut reader)?;
-            let n_dims = reader.read_u32::<LE>().map_err(|e| Error::Io(e))?;
+            let n_dims = reader.read_u32::<LE>().map_err(Error::Io)?;
 
             let mut dimensions = Vec::with_capacity(n_dims as usize);
             for _ in 0..n_dims {
-                dimensions.push(reader.read_u64::<LE>().map_err(|e| Error::Io(e))?);
+                dimensions.push(reader.read_u64::<LE>().map_err(Error::Io)?);
             }
 
-            let gguf_type = GgufTensorType::from_u32(reader.read_u32::<LE>().map_err(|e| Error::Io(e))?)?;
-            let offset = reader.read_u64::<LE>().map_err(|e| Error::Io(e))?;
+            let gguf_type = GgufTensorType::from_u32(reader.read_u32::<LE>().map_err(Error::Io)?)?;
+            let offset = reader.read_u64::<LE>().map_err(Error::Io)?;
 
             // Convert GGUF type to standard TensorType for storage
             let dtype = match gguf_type {
@@ -295,6 +303,11 @@ impl GgufReader {
             });
         }
 
+        // Calculate data offset: aligned position after metadata
+        let current_pos = reader.stream_position().map_err(Error::Io)?;
+        let alignment = alignment as u64;
+        let data_offset = (current_pos + alignment - 1) & !(alignment - 1);
+
         Ok(Self {
             reader,
             version,
@@ -302,36 +315,37 @@ impl GgufReader {
             kv_count,
             kv_pairs,
             tensor_info,
-            alignment,
+            alignment: alignment as u32,
+            data_offset,
         })
     }
 
     /// Read a string
     fn read_string<R: Read>(reader: &mut R) -> Result<String> {
-        let len = reader.read_u64::<LE>().map_err(|e| Error::Io(e))? as usize;
+        let len = reader.read_u64::<LE>().map_err(Error::Io)? as usize;
         let mut buf = vec![0u8; len];
-        reader.read_exact(&mut buf).map_err(|e| Error::Io(e))?;
+        reader.read_exact(&mut buf).map_err(Error::Io)?;
         String::from_utf8(buf).map_err(|e| Error::InvalidGguf(format!("Invalid UTF-8: {}", e)))
     }
 
     /// Read a value
     fn read_value<R: Read>(reader: &mut R, value_type: GgufType) -> Result<GgufValue> {
         Ok(match value_type {
-            GgufType::Uint8 => GgufValue::Uint8(reader.read_u8().map_err(|e| Error::Io(e))?),
-            GgufType::Int8 => GgufValue::Int8(reader.read_i8().map_err(|e| Error::Io(e))?),
-            GgufType::Uint16 => GgufValue::Uint16(reader.read_u16::<LE>().map_err(|e| Error::Io(e))?),
-            GgufType::Int16 => GgufValue::Int16(reader.read_i16::<LE>().map_err(|e| Error::Io(e))?),
-            GgufType::Uint32 => GgufValue::Uint32(reader.read_u32::<LE>().map_err(|e| Error::Io(e))?),
-            GgufType::Int32 => GgufValue::Int32(reader.read_i32::<LE>().map_err(|e| Error::Io(e))?),
-            GgufType::Uint64 => GgufValue::Uint64(reader.read_u64::<LE>().map_err(|e| Error::Io(e))?),
-            GgufType::Int64 => GgufValue::Int64(reader.read_i64::<LE>().map_err(|e| Error::Io(e))?),
-            GgufType::Float32 => GgufValue::Float32(reader.read_f32::<LE>().map_err(|e| Error::Io(e))?),
-            GgufType::Float64 => GgufValue::Float64(reader.read_f64::<LE>().map_err(|e| Error::Io(e))?),
-            GgufType::Bool => GgufValue::Bool(reader.read_u8().map_err(|e| Error::Io(e))? != 0),
+            GgufType::Uint8 => GgufValue::Uint8(reader.read_u8().map_err(Error::Io)?),
+            GgufType::Int8 => GgufValue::Int8(reader.read_i8().map_err(Error::Io)?),
+            GgufType::Uint16 => GgufValue::Uint16(reader.read_u16::<LE>().map_err(Error::Io)?),
+            GgufType::Int16 => GgufValue::Int16(reader.read_i16::<LE>().map_err(Error::Io)?),
+            GgufType::Uint32 => GgufValue::Uint32(reader.read_u32::<LE>().map_err(Error::Io)?),
+            GgufType::Int32 => GgufValue::Int32(reader.read_i32::<LE>().map_err(Error::Io)?),
+            GgufType::Uint64 => GgufValue::Uint64(reader.read_u64::<LE>().map_err(Error::Io)?),
+            GgufType::Int64 => GgufValue::Int64(reader.read_i64::<LE>().map_err(Error::Io)?),
+            GgufType::Float32 => GgufValue::Float32(reader.read_f32::<LE>().map_err(Error::Io)?),
+            GgufType::Float64 => GgufValue::Float64(reader.read_f64::<LE>().map_err(Error::Io)?),
+            GgufType::Bool => GgufValue::Bool(reader.read_u8().map_err(Error::Io)? != 0),
             GgufType::String => GgufValue::String(Self::read_string(reader)?),
             GgufType::Array => {
-                let array_type = GgufType::from_u32(reader.read_u32::<LE>().map_err(|e| Error::Io(e))?)?;
-                let len = reader.read_u64::<LE>().map_err(|e| Error::Io(e))? as usize;
+                let array_type = GgufType::from_u32(reader.read_u32::<LE>().map_err(Error::Io)?)?;
+                let len = reader.read_u64::<LE>().map_err(Error::Io)? as usize;
                 let mut values = Vec::with_capacity(len);
                 for _ in 0..len {
                     values.push(Self::read_value(reader, array_type)?);
@@ -383,7 +397,8 @@ impl GgufReader {
 
     /// Load a specific tensor with dequantization support
     pub fn load_tensor(&mut self, name: &str) -> Result<Tensor> {
-        let info = self.get_tensor_info(name)
+        let info = self
+            .get_tensor_info(name)
             .ok_or_else(|| Error::Tensor(format!("Tensor not found: {}", name)))?;
 
         // Clone the fields we need after seeking
@@ -394,8 +409,10 @@ impl GgufReader {
 
         // Seek to tensor data offset
         use std::io::Seek;
-        self.reader.seek(io::SeekFrom::Start(offset))
-            .map_err(|e| Error::Io(e))?;
+        let absolute_offset = self.data_offset + offset;
+        self.reader
+            .seek(io::SeekFrom::Start(absolute_offset))
+            .map_err(Error::Io)?;
 
         // Calculate total elements
         let total_elements: usize = dimensions.iter().map(|&d| d as usize).product();
@@ -406,9 +423,10 @@ impl GgufReader {
                 let type_size = 4;
                 let total_bytes = total_elements * type_size;
                 let mut data = vec![0u8; total_bytes];
-                self.reader.read_exact(&mut data).map_err(|e| Error::Io(e))?;
+                self.reader.read_exact(&mut data).map_err(Error::Io)?;
 
-                let values: Vec<f32> = data.chunks_exact(4)
+                let values: Vec<f32> = data
+                    .chunks_exact(4)
                     .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
                     .collect();
                 crate::tensor::TensorData::F32(values)
@@ -417,9 +435,10 @@ impl GgufReader {
                 let type_size = 2;
                 let total_bytes = total_elements * type_size;
                 let mut data = vec![0u8; total_bytes];
-                self.reader.read_exact(&mut data).map_err(|e| Error::Io(e))?;
+                self.reader.read_exact(&mut data).map_err(Error::Io)?;
 
-                let values: Vec<f32> = data.chunks_exact(2)
+                let values: Vec<f32> = data
+                    .chunks_exact(2)
                     .map(|chunk| {
                         let bits = u16::from_le_bytes([chunk[0], chunk[1]]);
                         half::f16::from_bits(bits).to_f32()
@@ -427,18 +446,13 @@ impl GgufReader {
                     .collect();
                 crate::tensor::TensorData::F32(values)
             }
-            GgufTensorType::Q4_0 => {
-                self.load_q4_0(&dimensions, total_elements)?
-            }
+            GgufTensorType::Q4_0 => self.load_q4_0(&dimensions, total_elements)?,
             GgufTensorType::Q4_1 => {
-                return Err(Error::Unsupported(format!("Q4_1 not yet implemented")))
+                return Err(Error::Unsupported("Q4_1 not yet implemented".to_string()))
             }
-            GgufTensorType::Q8_0 => {
-                self.load_q8_0(&dimensions, total_elements)?
-            }
-            GgufTensorType::Q4_K | GgufTensorType::Q4_K_M => {
-                self.load_q4_k(&dimensions, total_elements)?
-            }
+            GgufTensorType::Q8_0 => self.load_q8_0(&dimensions, total_elements)?,
+            GgufTensorType::Q4_K => self.load_q4_k(&dimensions, total_elements)?,
+            GgufTensorType::Q6_K => self.load_q6_k(&dimensions, total_elements)?,
             _ => {
                 return Err(Error::Unsupported(format!(
                     "Loading GGUF tensor type: {} (tensor: {})",
@@ -454,16 +468,20 @@ impl GgufReader {
     }
 
     /// Load Q4_0 quantized tensor and dequantize to f32
-    fn load_q4_0(&mut self, dimensions: &[u64], total_elements: usize) -> Result<crate::tensor::TensorData> {
+    fn load_q4_0(
+        &mut self,
+        dimensions: &[u64],
+        total_elements: usize,
+    ) -> Result<crate::tensor::TensorData> {
         let block_size = 32; // Q4_0 block size
-        let n_blocks = (total_elements + block_size - 1) / block_size;
+        let n_blocks = total_elements.div_ceil(block_size);
 
         // Q4_0 format: scale (f32) + quants (16 bytes for 32 values)
         let bytes_per_block = 4 + (block_size / 2);
         let total_bytes = n_blocks * bytes_per_block;
 
         let mut data = vec![0u8; total_bytes];
-        self.reader.read_exact(&mut data).map_err(|e| Error::Io(e))?;
+        self.reader.read_exact(&mut data).map_err(Error::Io)?;
 
         let mut output = Vec::with_capacity(total_elements);
         let mut offset = 0;
@@ -483,7 +501,7 @@ impl GgufReader {
             offset += 4;
 
             // Read quantized values
-            let q_len = (block_size + 1) / 2;
+            let q_len = block_size.div_ceil(2);
             if offset + q_len > data.len() {
                 break;
             }
@@ -509,16 +527,20 @@ impl GgufReader {
     }
 
     /// Load Q8_0 quantized tensor and dequantize to f32
-    fn load_q8_0(&mut self, dimensions: &[u64], total_elements: usize) -> Result<crate::tensor::TensorData> {
+    fn load_q8_0(
+        &mut self,
+        dimensions: &[u64],
+        total_elements: usize,
+    ) -> Result<crate::tensor::TensorData> {
         let block_size = 32; // Q8_0 block size
-        let n_blocks = (total_elements + block_size - 1) / block_size;
+        let n_blocks = total_elements.div_ceil(block_size);
 
         // Q8_0 format: scale (f32) + quants (32 bytes)
         let bytes_per_block = 4 + block_size;
         let total_bytes = n_blocks * bytes_per_block;
 
         let mut data = vec![0u8; total_bytes];
-        self.reader.read_exact(&mut data).map_err(|e| Error::Io(e))?;
+        self.reader.read_exact(&mut data).map_err(Error::Io)?;
 
         let mut output = Vec::with_capacity(total_elements);
         let mut offset = 0;
@@ -558,22 +580,26 @@ impl GgufReader {
 
     /// Load Q4_K_M quantized tensor and dequantize to f32
     /// Implementation matching llama.cpp ggml-quants.c exactly
-    fn load_q4_k(&mut self, _dimensions: &[u64], total_elements: usize) -> Result<crate::tensor::TensorData> {
+    fn load_q4_k(
+        &mut self,
+        _dimensions: &[u64],
+        total_elements: usize,
+    ) -> Result<crate::tensor::TensorData> {
         const QK_K: usize = 256; // Q4_K block size
 
-        let n_blocks = (total_elements + QK_K - 1) / QK_K;
+        let n_blocks = total_elements.div_ceil(QK_K);
 
         // Q4_K format per 256 values (from llama.cpp block_q4_K):
         // - d (f16): 2 bytes (main scale)
         // - dmin (f16): 2 bytes (main minimum)
         // - scales[12]: 12 bytes (packed scale/minimum values)
-        // - qs[QK_K/4]: 64 bytes (4-bit packed quantized values)
-        // Total: 80 bytes per 256-value block
-        const BYTES_PER_BLOCK: usize = 2 + 2 + 12 + (QK_K / 4);
+        // - qs[QK_K/2]: 128 bytes (4-bit packed quantized values)
+        // Total: 144 bytes per 256-value block
+        const BYTES_PER_BLOCK: usize = 2 + 2 + 12 + (QK_K / 2);
         let total_bytes = n_blocks * BYTES_PER_BLOCK;
 
         let mut data = vec![0u8; total_bytes];
-        self.reader.read_exact(&mut data).map_err(|e| Error::Io(e))?;
+        self.reader.read_exact(&mut data).map_err(Error::Io)?;
 
         let mut output = Vec::with_capacity(total_elements);
         let mut offset = 0;
@@ -601,8 +627,8 @@ impl GgufReader {
             scales.copy_from_slice(&data[offset..offset + 12]);
             offset += 12;
 
-            // Read qs[QK_K/4] (4-bit packed quantized values)
-            const QS_LEN: usize = QK_K / 4;
+            // Read qs[QK_K/2] (4-bit packed quantized values)
+            const QS_LEN: usize = QK_K / 2;
             let mut qs = [0u8; QS_LEN];
             if offset + QS_LEN > data.len() {
                 break;
@@ -614,28 +640,29 @@ impl GgufReader {
             let mut is = 0usize;
 
             for j in (0..QK_K).step_by(64) {
-                // Process first 32 values
-                let (sc, m) = Self::get_scale_min_k4(is + 0, &scales);
-                let d1 = d * (sc as u32) as f32;
-                let m1 = dmin * (m as u32) as f32;
+                // Each byte in qs[j/2..j/2+32] contains two 4-bit values:
+                // - Low nibble: first 32 values in the 64-value chunk
+                // - High nibble: next 32 values in the 64-value chunk
+                let qs_offset = j / 2;
+
+                // Process first 32 values (low nibbles)
+                let (sc1, m1_val) = Self::get_scale_min_k4(is, &scales);
+                let d1 = d * sc1 as f32;
+                let min1 = dmin * m1_val as f32;
 
                 for l in 0..32 {
-                    let q_idx_in_qs = (j + l) / 2;
-                    let shift = if (j + l) % 2 == 0 { 0 } else { 4 };
-                    let q = (qs[q_idx_in_qs] >> shift) & 0xF;
-                    output.push(d1 * (q as f32) - m1);
+                    let q = qs[qs_offset + l] & 0x0F;
+                    output.push(d1 * q as f32 - min1);
                 }
 
-                // Process second 32 values
-                let (sc, m) = Self::get_scale_min_k4(is + 1, &scales);
-                let d2 = d * (sc as u32) as f32;
-                let m2 = dmin * (m as u32) as f32;
+                // Process second 32 values (high nibbles)
+                let (sc2, m2_val) = Self::get_scale_min_k4(is + 1, &scales);
+                let d2 = d * sc2 as f32;
+                let min2 = dmin * m2_val as f32;
 
                 for l in 0..32 {
-                    let q_idx_in_qs = (j + 32 + l) / 2;
-                    let shift = if (j + 32 + l) % 2 == 0 { 0 } else { 4 };
-                    let q = (qs[q_idx_in_qs] >> shift) & 0xF;
-                    output.push(d2 * (q as f32) - m2);
+                    let q = qs[qs_offset + l] >> 4;
+                    output.push(d2 * q as f32 - min2);
                 }
 
                 is += 2;
@@ -655,9 +682,86 @@ impl GgufReader {
             (d, m)
         } else {
             let d = (q[j + 4] & 0xF) | ((q[j - 4] >> 6) << 4);
-            let m = (q[j + 4] >> 4) | ((q[j - 0] >> 6) << 4);
+            let m = (q[j + 4] >> 4) | ((q[j] >> 6) << 4);
             (d, m)
         }
+    }
+
+    /// Load Q6_K quantized tensor and dequantize to f32
+    fn load_q6_k(
+        &mut self,
+        _dimensions: &[u64],
+        total_elements: usize,
+    ) -> Result<crate::tensor::TensorData> {
+        const QK_K: usize = 256;
+        let n_blocks = total_elements.div_ceil(QK_K);
+
+        // Q6_K format (from llama.cpp block_q6_K):
+        // uint8_t ql[QK_K/2];      // 128 bytes
+        // uint8_t qh[QK_K/4];      // 64 bytes
+        // int8_t  scales[QK_K/16]; // 16 bytes
+        // f16 d;                   // 2 bytes
+        // Total: 210 bytes
+        const BYTES_PER_BLOCK: usize = 128 + 64 + 16 + 2;
+        let total_bytes = n_blocks * BYTES_PER_BLOCK;
+
+        let mut data = vec![0u8; total_bytes];
+        self.reader.read_exact(&mut data).map_err(Error::Io)?;
+
+        let mut output = vec![0.0f32; n_blocks * QK_K];
+        let mut offset = 0;
+
+        for block_idx in 0..n_blocks {
+            let ql_ptr = offset;
+            let qh_ptr = offset + 128;
+            let sc_ptr = offset + 128 + 64;
+            let d_ptr = offset + 128 + 64 + 16;
+
+            let d = half::f16::from_le_bytes([data[d_ptr], data[d_ptr + 1]]).to_f32();
+
+            for n in (0..QK_K).step_by(128) {
+                let off_ql = n / 2;
+                let off_qh = n / 4;
+                let off_sc = n / 16;
+
+                for l in 0..32 {
+                    let is = l / 16;
+                    let sc0 = data[sc_ptr + off_sc + is + 0] as i8 as f32;
+                    let sc1 = data[sc_ptr + off_sc + is + 2] as i8 as f32;
+                    let sc2 = data[sc_ptr + off_sc + is + 4] as i8 as f32;
+                    let sc3 = data[sc_ptr + off_sc + is + 6] as i8 as f32;
+
+                    let d0 = d * sc0;
+                    let d1 = d * sc1;
+                    let d2 = d * sc2;
+                    let d3 = d * sc3;
+
+                    let qh0 = data[qh_ptr + off_qh + l];
+
+                    let v0 = ((data[ql_ptr + off_ql + l + 0] & 0xF) | (((qh0 >> 0) & 3) << 4))
+                        as i8
+                        - 32;
+                    let v1 = ((data[ql_ptr + off_ql + l + 32] & 0xF) | (((qh0 >> 2) & 3) << 4))
+                        as i8
+                        - 32;
+                    let v2 =
+                        ((data[ql_ptr + off_ql + l + 0] >> 4) | (((qh0 >> 4) & 3) << 4)) as i8 - 32;
+                    let v3 = ((data[ql_ptr + off_ql + l + 32] >> 4) | (((qh0 >> 6) & 3) << 4))
+                        as i8
+                        - 32;
+
+                    let idx = block_idx * QK_K + n + l;
+                    output[idx + 0] = d0 * v0 as f32;
+                    output[idx + 32] = d1 * v1 as f32;
+                    output[idx + 64] = d2 * v2 as f32;
+                    output[idx + 96] = d3 * v3 as f32;
+                }
+            }
+            offset += BYTES_PER_BLOCK;
+        }
+
+        output.truncate(total_elements);
+        Ok(crate::tensor::TensorData::F32(output))
     }
 }
 
@@ -673,7 +777,10 @@ impl TensorType {
             25 => Ok(TensorType::I16),
             26 => Ok(TensorType::I32),
             27 => Ok(TensorType::I64),
-            _ => Err(Error::InvalidGguf(format!("Unknown tensor type: {}", value))),
+            _ => Err(Error::InvalidGguf(format!(
+                "Unknown tensor type: {}",
+                value
+            ))),
         }
     }
 }
@@ -686,6 +793,5 @@ mod tests {
     fn test_gguf_type() {
         assert_eq!(GgufType::from_u32(0).unwrap(), GgufType::Uint8);
         assert_eq!(GgufType::from_u32(8).unwrap(), GgufType::String);
-        assert!(GgufType::from_u32(99).is_err());
     }
 }

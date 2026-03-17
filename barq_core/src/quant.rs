@@ -1,7 +1,7 @@
 //! Quantization types and utilities
 
-use serde::{Deserialize, Serialize};
 use crate::error::{Error, Result};
+use serde::{Deserialize, Serialize};
 
 /// Quantization type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -157,7 +157,10 @@ impl QuantizationType {
             "iq1_m" => Ok(QuantizationType::IQ1_M),
             "tq1_0" => Ok(QuantizationType::TQ1_0),
             "tq2_0" => Ok(QuantizationType::TQ2_0),
-            _ => Err(Error::Quantization(format!("Unknown quantization type: {}", s))),
+            _ => Err(Error::Quantization(format!(
+                "Unknown quantization type: {}",
+                s
+            ))),
         }
     }
 }
@@ -188,9 +191,18 @@ mod tests {
 
     #[test]
     fn test_parse_quantization_type() {
-        assert_eq!(QuantizationType::from_str("q4_k").unwrap(), QuantizationType::Q4_K);
-        assert_eq!(QuantizationType::from_str("Q4_K").unwrap(), QuantizationType::Q4_K);
-        assert_eq!(QuantizationType::from_str("f32").unwrap(), QuantizationType::F32);
+        assert_eq!(
+            QuantizationType::from_str("q4_k").unwrap(),
+            QuantizationType::Q4_K
+        );
+        assert_eq!(
+            QuantizationType::from_str("Q4_K").unwrap(),
+            QuantizationType::Q4_K
+        );
+        assert_eq!(
+            QuantizationType::from_str("f32").unwrap(),
+            QuantizationType::F32
+        );
         assert!(QuantizationType::from_str("unknown").is_err());
     }
 }

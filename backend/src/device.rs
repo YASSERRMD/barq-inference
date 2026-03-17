@@ -1,7 +1,5 @@
 //! Device management and abstraction
 
-use std::sync::Arc;
-
 use barq_core::error::{Error, Result};
 
 /// Device type

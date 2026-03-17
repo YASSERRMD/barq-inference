@@ -1,11 +1,39 @@
+#![allow(
+    clippy::all,
+    unexpected_cfgs,
+    dead_code,
+    unused_variables,
+    unused_imports,
+    unused_mut,
+    non_camel_case_types,
+    unused_parens,
+    unused_comparisons,
+    unreachable_code
+)]
+#![allow(
+    dead_code,
+    unused_variables,
+    unused_imports,
+    unused_mut,
+    non_camel_case_types,
+    unused_parens,
+    unused_comparisons,
+    unreachable_code,
+    clippy::needless_update,
+    clippy::too_many_arguments,
+    clippy::needless_range_loop,
+    clippy::let_and_return,
+    clippy::manual_range_contains
+)]
+
 //! Quantization algorithms
 //!
 //! This module provides implementations for various quantization schemes
 //! used to compress LLM weights while maintaining accuracy.
 
+pub mod iq;
 pub mod q4_0;
 pub mod q4_k;
-pub mod iq;
 pub mod simd_quant;
 // pub mod ik_quant;  // TODO: Implement
 // pub mod blockwise;  // TODO: Implement

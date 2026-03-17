@@ -93,10 +93,11 @@ impl MemoryBuffer for HostBuffer {
 
     fn copy_from(&mut self, src: &dyn MemoryBuffer) -> Result<()> {
         if src.size() > self.size() {
-            return Err(Error::Allocation(
-                format!("Source buffer ({} bytes) larger than destination ({} bytes)",
-                       src.size(), self.size())
-            ));
+            return Err(Error::Allocation(format!(
+                "Source buffer ({} bytes) larger than destination ({} bytes)",
+                src.size(),
+                self.size()
+            )));
         }
 
         unsafe {
@@ -151,10 +152,12 @@ impl Allocator for DefaultAllocator {
 
         if new_used > self.total_size {
             self.used_size.fetch_sub(size, Ordering::Relaxed);
-            return Err(Error::Allocation(
-                format!("Out of memory: tried to allocate {} bytes, {} bytes already used of {} total",
-                       size, new_used - size, self.total_size)
-            ));
+            return Err(Error::Allocation(format!(
+                "Out of memory: tried to allocate {} bytes, {} bytes already used of {} total",
+                size,
+                new_used - size,
+                self.total_size
+            )));
         }
 
         let buffer = Box::new(HostBuffer::new(size)?);

@@ -2,8 +2,7 @@
 //!
 //! 4-bit quantization with scale per block
 
-use barq_core::tensor::{Tensor, TensorType, Shape};
-use barq_core::error::{Error, Result};
+use barq_core::error::Result;
 
 /// Q4_0 quantization: 4-bit weights with per-block scale
 ///
@@ -18,14 +17,12 @@ pub struct Q4_0 {
 
 impl Q4_0 {
     pub fn new() -> Self {
-        Self {
-            block_size: 32,
-        }
+        Self { block_size: 32 }
     }
 
     pub fn quantize(&self, input: &[f32]) -> Result<Vec<u8>> {
         let block_size = self.block_size;
-        let n_blocks = (input.len() + block_size - 1) / block_size;
+        let n_blocks = input.len().div_ceil(block_size);
 
         let mut output = Vec::new();
 
@@ -38,14 +35,10 @@ impl Q4_0 {
             let max_abs = block.iter().fold(0.0f32, |acc, &x| acc.max(x.abs()));
 
             // Compute scale: max_abs / -8.0 (since 4-bit signed range is -8 to 7)
-            let scale = if max_abs == 0.0 {
-                0.0
-            } else {
-                max_abs / 8.0
-            };
+            let scale = if max_abs == 0.0 { 0.0 } else { max_abs / 8.0 };
 
             // Quantize block
-            let mut quants = vec![0u8; (block.len() + 1) / 2];
+            let mut quants = vec![0u8; block.len().div_ceil(2)];
 
             for (i, &val) in block.iter().enumerate() {
                 let q = if scale == 0.0 {
@@ -60,7 +53,7 @@ impl Q4_0 {
                 // Pack two 4-bit values into one byte
                 let byte_idx = i / 2;
                 let shift = if i % 2 == 0 { 0 } else { 4 };
-                quants[byte_idx] |= ((q as u8 & 0x0F) << shift);
+                quants[byte_idx] |= (q as u8 & 0x0F) << shift;
             }
 
             // Output scale (as f32 bytes)
@@ -75,7 +68,7 @@ impl Q4_0 {
 
     pub fn dequantize(&self, input: &[u8], output_size: usize) -> Result<Vec<f32>> {
         let block_size = self.block_size;
-        let n_blocks = (output_size + block_size - 1) / block_size;
+        let n_blocks = output_size.div_ceil(block_size);
 
         let mut output = Vec::with_capacity(output_size);
         let mut offset = 0;
@@ -95,7 +88,7 @@ impl Q4_0 {
             offset += 4;
 
             // Read quantized values
-            let q_len = (block_size + 1) / 2;
+            let q_len = block_size.div_ceil(2);
             if offset + q_len > input.len() {
                 break;
             }
@@ -145,7 +138,11 @@ mod tests {
         assert_eq!(dequantized.len(), input.len());
 
         // Check values are approximately correct (within quantization error for Q4_0 limits)
-        for (i, (&orig, &deq)) in input.iter().zip(dequantized[..input.len()].iter()).enumerate() {
+        for (i, (&orig, &deq)) in input
+            .iter()
+            .zip(dequantized[..input.len()].iter())
+            .enumerate()
+        {
             let error = (orig - deq).abs();
             assert!(error < 1.5, "Error at index {}: {} vs {}", i, orig, deq);
         }

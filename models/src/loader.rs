@@ -6,12 +6,11 @@ use std::path::Path;
 use std::sync::Arc;
 
 use tokio::fs::File;
-use tokio::io::BufReader;
 
 use crate::arch::LlmArch;
-use barq_core::gguf::GgufReader;
-use barq_core::tensor::{Tensor, TensorType, Shape};
 use barq_core::error::{Error, Result};
+use barq_core::gguf::GgufReader;
+use barq_core::tensor::Tensor;
 
 /// Model hyperparameters
 #[derive(Debug, Clone)]
@@ -72,7 +71,7 @@ impl Model {
     /// Load a model from a GGUF file
     pub async fn load<P: AsRef<Path>>(path: P) -> Result<Self> {
         let path_str = path.as_ref().to_string_lossy().to_string();
-        let _file = File::open(&path_str).await.map_err(|e| Error::Io(e))?;
+        let _file = File::open(&path_str).await.map_err(Error::Io)?;
         // For now, we'll use synchronous GGUF reading
         // In production, this should be fully async
 
@@ -123,10 +122,18 @@ impl Model {
                 }
             }
 
-            Ok::<(LlmArch, ModelHParams, std::collections::HashMap<String, Tensor>, std::collections::HashMap<String, String>), Error>(
-                (arch, hparams, tensors_map, metadata_map)
-            )
-        }).await.map_err(|e| Error::Backend(format!("Failed to join task: {}", e)))??;
+            Ok::<
+                (
+                    LlmArch,
+                    ModelHParams,
+                    std::collections::HashMap<String, Tensor>,
+                    std::collections::HashMap<String, String>,
+                ),
+                Error,
+            >((arch, hparams, tensors_map, metadata_map))
+        })
+        .await
+        .map_err(|e| Error::Backend(format!("Failed to join task: {}", e)))??;
 
         println!("Loaded {} tensors from GGUF file", tensors.len());
 
@@ -168,22 +175,43 @@ impl Model {
 
     fn extract_hparams(reader: &GgufReader) -> ModelHParams {
         let get_u32 = |key: &str| -> u32 {
-            reader.get(key)
-                .and_then(|v| if let barq_core::gguf::GgufValue::Uint32(u) = v { Some(*u) } else { None })
+            reader
+                .get(key)
+                .and_then(|v| {
+                    if let barq_core::gguf::GgufValue::Uint32(u) = v {
+                        Some(*u)
+                    } else {
+                        None
+                    }
+                })
                 .unwrap_or(0)
         };
 
         let get_f32 = |key: &str| -> f32 {
-            reader.get(key)
-                .and_then(|v| if let barq_core::gguf::GgufValue::Float32(f) = v { Some(*f) } else { None })
+            reader
+                .get(key)
+                .and_then(|v| {
+                    if let barq_core::gguf::GgufValue::Float32(f) = v {
+                        Some(*f)
+                    } else {
+                        None
+                    }
+                })
                 .unwrap_or(0.0)
         };
 
         // Try both llama and general prefixes for vocab size
         let n_vocab = get_u32("llama.vocabulary_size");
         let n_vocab = if n_vocab == 0 {
-            reader.get("general.vocab_size")
-                .and_then(|v| if let barq_core::gguf::GgufValue::Uint32(u) = v { Some(*u) } else { None })
+            reader
+                .get("general.vocab_size")
+                .and_then(|v| {
+                    if let barq_core::gguf::GgufValue::Uint32(u) = v {
+                        Some(*u)
+                    } else {
+                        None
+                    }
+                })
                 .unwrap_or(32000)
         } else {
             n_vocab
@@ -192,33 +220,61 @@ impl Model {
         ModelHParams {
             n_layer: {
                 let v = get_u32("llama.block_count");
-                if v == 0 { get_u32("general.n_layers") } else { v }
+                if v == 0 {
+                    get_u32("general.n_layers")
+                } else {
+                    v
+                }
             },
             n_head: {
                 let v = get_u32("llama.attention.head_count");
-                if v == 0 { get_u32("general.n_head") } else { v }
+                if v == 0 {
+                    get_u32("general.n_head")
+                } else {
+                    v
+                }
             },
             n_head_kv: get_u32("llama.attention.head_count_kv"),
             n_embd: {
                 let v = get_u32("llama.embedding_length");
-                if v == 0 { get_u32("general.n_embd") } else { v }
+                if v == 0 {
+                    get_u32("general.n_embd")
+                } else {
+                    v
+                }
             },
             n_ff: {
                 let v = get_u32("llama.feed_forward_length");
-                if v == 0 { get_u32("general.n_ff") } else { v }
+                if v == 0 {
+                    get_u32("general.n_ff")
+                } else {
+                    v
+                }
             },
             n_vocab,
             n_ctx_train: {
                 let v = get_u32("llama.context_length");
-                if v == 0 { get_u32("general.n_context") } else { v }
+                if v == 0 {
+                    get_u32("general.n_context")
+                } else {
+                    v
+                }
             },
             rope_freq_base: {
                 let v = get_f32("llama.rope.freq_base");
-                if v == 0.0 { 10000.0 } else { v }
+                if v == 0.0 {
+                    10000.0
+                } else {
+                    v
+                }
             },
             rope_freq_scale: {
                 let v = get_f32("llama.rope.freq_scale");
-                if v == 0.0 { 1.0 } else { v }
+                if v == 0.0 {
+                    1.0
+                } else {
+                    v
+                }
             },
             rope_scaling_type: get_u32("llama.rope.scaling.type"),
             ..Default::default()

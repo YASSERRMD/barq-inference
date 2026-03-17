@@ -6,11 +6,8 @@
 //! Expected gain: 4-6x aggregate TPS at 8 concurrent requests
 
 use std::collections::VecDeque;
-use std::sync::Arc;
-use tokio::sync::Mutex;
 
 use barq_core::error::{Error, Result};
-use barq_core::tensor::Tensor;
 
 /// Active sequence in batch
 #[derive(Debug)]
@@ -71,7 +68,9 @@ impl BatchScheduler {
                 Ok(tokens) => Ok(tokens),
                 Err(_) => Err(Error::Backend("Request cancelled".to_string())),
             }
-        }).await.unwrap()
+        })
+        .await
+        .unwrap()
     }
 
     /// Fill batch for next forward pass
@@ -178,9 +177,9 @@ pub struct ContinuousBatchingConfig {
 impl Default for ContinuousBatchingConfig {
     fn default() -> Self {
         Self {
-            max_batch: 2048,     // Max tokens per decode step
-            max_sequences: 32,   // Max concurrent sequences
-            n_ctx_total: 32768,  // Total context for all sequences
+            max_batch: 2048,    // Max tokens per decode step
+            max_sequences: 32,  // Max concurrent sequences
+            n_ctx_total: 32768, // Total context for all sequences
         }
     }
 }

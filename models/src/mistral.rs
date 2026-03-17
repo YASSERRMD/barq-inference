@@ -1,7 +1,7 @@
 //! Mistral model implementation
 
 use crate::arch::LlmArch;
-use crate::context::{ModelContext, ContextParams};
+use crate::context::{ContextParams, ModelContext};
 use crate::loader::Model;
 use barq_core::error::{Error, Result};
 use std::sync::Arc;

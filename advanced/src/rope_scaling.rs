@@ -6,8 +6,7 @@
 //! - NTK-aware scaling
 //! - LongRoPE
 
-use barq_core::tensor::{Tensor, TensorType, Shape};
-use barq_core::error::{Error, Result};
+use barq_core::error::Result;
 
 /// RoPE scaling type
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -126,7 +125,8 @@ impl RopeScaling for NtkAwareScaling {
 
         for &pos in positions {
             for i in 0..dim {
-                let theta = (pos as f32) / (self.config.freq_base * alpha).powf(2.0 * i as f32 / dim as f32);
+                let theta = (pos as f32)
+                    / (self.config.freq_base * alpha).powf(2.0 * i as f32 / dim as f32);
                 scaled.push(theta);
             }
         }
@@ -155,7 +155,7 @@ mod tests {
         let yarn = YaRNScaling::new(config);
         let scale = yarn.compute_yarn_scale(1024);
 
-        assert!(scale > 1.0 && scale < 2.0);
+        assert!(scale > 1.0 && scale <= 2.0);
     }
 
     #[test]

@@ -3,10 +3,9 @@
 //! Provides JSON-formatted structured logging with configurable levels,
 //! request correlation IDs, and integration with metrics system.
 
-use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Log level
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -165,7 +164,7 @@ impl RequestLogger {
             return;
         }
 
-        let mut entry = LogEntry {
+        let entry = LogEntry {
             timestamp: current_timestamp_ms(),
             level: level.as_str().to_string(),
             message: message.to_string(),
@@ -181,9 +180,7 @@ impl RequestLogger {
         } else {
             println!(
                 "[{}][request_id={}] {}",
-                entry.level,
-                self.request_id,
-                entry.message
+                entry.level, self.request_id, entry.message
             );
         }
     }

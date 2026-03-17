@@ -67,7 +67,7 @@ impl CpuBuffer {
     }
 
     pub fn from_vec(buffer_type: BufferType, dtype: TensorType, data: Vec<u8>) -> Result<Self> {
-        if data.len() % dtype.size() != 0 {
+        if !data.len().is_multiple_of(dtype.size()) {
             return Err(Error::tensor("Data size not aligned with dtype"));
         }
 
@@ -106,17 +106,15 @@ impl Buffer for CpuBuffer {
 
     fn copy_from(&mut self, src: &dyn Buffer) -> Result<()> {
         if src.dtype() != self.dtype {
-            return Err(Error::type_mismatch(
-                self.dtype.name(),
-                src.dtype().name()
-            ));
+            return Err(Error::type_mismatch(self.dtype.name(), src.dtype().name()));
         }
 
         if src.size() > self.size() {
-            return Err(Error::Allocation(
-                format!("Source buffer ({} bytes) larger than destination ({} bytes)",
-                       src.size(), self.size())
-            ));
+            return Err(Error::Allocation(format!(
+                "Source buffer ({} bytes) larger than destination ({} bytes)",
+                src.size(),
+                self.size()
+            )));
         }
 
         // Copy from CPU buffer
@@ -124,7 +122,9 @@ impl Buffer for CpuBuffer {
             self.data[..src.size()].copy_from_slice(&cpu_src.data[..src.size()]);
             Ok(())
         } else {
-            Err(Error::Unsupported("Cross-buffer copy not implemented".to_string()))
+            Err(Error::Unsupported(
+                "Cross-buffer copy not implemented".to_string(),
+            ))
         }
     }
 
@@ -178,7 +178,9 @@ impl Buffer for GpuBuffer {
     }
 
     fn copy_from(&mut self, _src: &dyn Buffer) -> Result<()> {
-        Err(Error::Unsupported("GPU buffer copy not implemented".to_string()))
+        Err(Error::Unsupported(
+            "GPU buffer copy not implemented".to_string(),
+        ))
     }
 
     fn clone_box(&self) -> Box<dyn Buffer> {
