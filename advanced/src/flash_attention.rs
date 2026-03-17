@@ -69,8 +69,8 @@ impl FlashAttention {
         self.validate_inputs(q, k, v)?;
 
         let shape = q.shape();
-        let batch_size = shape\.dims()[0];
-        let seq_len = shape\.dims()[1];
+        let batch_size = shape.dims()[0];
+        let seq_len = shape.dims()[1];
 
         // Extract f32 data
         let q_data = q.as_f32_slice()?;
@@ -128,11 +128,11 @@ impl FlashAttention {
             return Err(Error::tensor("Q, K, V must have the same shape"));
         }
 
-        if q_shape\.dims()[2] != self.num_heads {
+        if q_shape.dims()[2] != self.num_heads {
             return Err(Error::tensor("Number of heads mismatch"));
         }
 
-        if q_shape\.dims()[3] != self.head_dim {
+        if q_shape.dims()[3] != self.head_dim {
             return Err(Error::tensor("Head dimension mismatch"));
         }
 
