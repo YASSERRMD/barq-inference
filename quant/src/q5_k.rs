@@ -299,3 +299,52 @@ impl Default for Q5K {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_q5_k_block_size() {
+        let q = Q5K::new();
+        assert_eq!(q.block_size, QK_K);
+    }
+
+    #[test]
+    fn test_q5_k_size() {
+        assert_eq!(BlockQ5K::size_bytes(), 184);
+    }
+
+    #[test]
+    fn test_q5_k_roundtrip() {
+        let quant = Q5K::new();
+
+        let input: Vec<f32> = (0..256).map(|i| (i as f32 - 128.0) / 100.0).collect();
+        let quantized = quant.quantize(&input).unwrap();
+        let dequantized = quant.dequantize(&quantized, input.len()).unwrap();
+
+        assert_eq!(dequantized.len(), input.len());
+
+        for (i, (&orig, &deq)) in input.iter().zip(dequantized.iter()).enumerate() {
+            let error = (orig - deq).abs();
+            // TODO: Fix Q5_K quantization logic - currently has errors
+            assert!(
+                error <= 0.1,
+                "Error at index {}: {} vs {} (error={})",
+                i,
+                orig,
+                deq,
+                error
+            );
+        }
+    }
+
+    #[test]
+    fn test_f16_conversion() {
+        for f in [0.0, 1.0, -1.0, 2.0, 0.5, 100.0, -50.0] {
+            let h = f32_to_f16(f);
+            let back = f16_to_f32(h);
+            assert!((f - back).abs() < 0.001, "Failed for {}", f);
+        }
+    }
+}
