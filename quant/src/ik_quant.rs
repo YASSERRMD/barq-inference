@@ -8,8 +8,8 @@
 //! - IQ2_KS: 2-bit with surprising quality (best for ultra-low VRAM)
 //! - Q4_K_R4: Repacked for better CPU performance
 
-use core::error::{Error, Result};
-use core::tensor::{Tensor, TensorType, Shape, TensorData};
+use barq_core::error::{Error, Result};
+use barq_core::tensor::{Tensor, TensorType, Shape, TensorData};
 
 /// ik_llama.cpp quantization types
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -200,7 +200,7 @@ pub fn repack_model_cpu(
     Ok(())
 }
 
-use core::error::Error as CoreError;
+use barq_core::error::Error as CoreError;
 
 fn info(msg: &str) {
     println!("{}", msg);

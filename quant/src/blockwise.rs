@@ -1,6 +1,6 @@
 //! Block-wise quantization utilities
 
-use core::error::{Error, Result};
+use barq_core::error::{Error, Result};
 
 /// Block-wise quantization trait
 pub trait QuantizeBlock: Send + Sync {

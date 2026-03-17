@@ -2,8 +2,12 @@
 
 use crate::tokenizer::Tokenizer;
 use crate::vocab::{TokenizationResult, Vocab};
+use std::pin;
+use std::future;
+use std::marker;
 use async_trait::async_trait;
-use core::error::Error;
+use anyhow::Result;
+
 
 /// WordPiece tokenizer (BERT)
 pub struct WordPiece {
@@ -20,12 +24,12 @@ impl WordPiece {
 
 #[async_trait]
 impl Tokenizer for WordPiece {
-    async fn tokenize(&self, _text: &str, _add_special: bool) -> Result<TokenizationResult, Error> {
-        Err(Error::Unsupported("WordPiece not yet implemented".to_string()))
+    async fn tokenize(&self, _text: &str, _add_special: bool) -> Result<TokenizationResult> {
+        Err(anyhow::anyhow!("WordPiece not yet implemented".to_string()))
     }
 
-    async fn decode(&self, _ids: &[u32]) -> Result<String, Error> {
-        Err(Error::Unsupported("WordPiece not yet implemented".to_string()))
+    async fn decode(&self, _ids: &[u32]) -> Result<String> {
+        Err(anyhow::anyhow!("WordPiece not yet implemented".to_string()))
     }
 
     fn vocab(&self) -> &Vocab {
