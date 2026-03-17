@@ -15,7 +15,7 @@ pub mod metrics;
 pub mod logging;
 // pub mod metrics_server;  // TODO: Fix hyper compatibility issues
 
-pub use speculative::SpeculativeDecoding;
+pub use speculative::{SpeculativeDecoding, SpeculativeEngine, MockSpeculativeDecoder};
 pub use flash_attention::FlashAttention;
 pub use paged_attention::PagedAttention;
 pub use prompt_cache::PromptCache;
