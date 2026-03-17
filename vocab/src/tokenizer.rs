@@ -1,18 +1,21 @@
 //! Tokenizer trait and common implementations
 
+use std::pin;
+use std::future;
+use std::marker;
 use async_trait::async_trait;
 
 use crate::vocab::{TokenizationResult, Vocab, VocabType};
-use core::error::Error;
+use anyhow::Result;
 
 /// Tokenizer trait
 #[async_trait]
 pub trait Tokenizer: Send + Sync {
     /// Tokenize text into token IDs
-    async fn tokenize(&self, text: &str, add_special: bool) -> Result<TokenizationResult, Error>;
+    async fn tokenize(&self, text: &str, add_special: bool) -> Result<TokenizationResult>;
 
     /// Decode token IDs back to text
-    async fn decode(&self, ids: &[u32]) -> Result<String, Error>;
+    async fn decode(&self, ids: &[u32]) -> Result<String>;
 
     /// Returns the vocabulary
     fn vocab(&self) -> &Vocab;
@@ -46,20 +49,21 @@ pub struct WhitespaceTokenizer {
 impl WhitespaceTokenizer {
     /// Create a new whitespace tokenizer
     pub fn new() -> Self {
-        let mut vocab = Vocab::new(VocabType::SPM);
-        vocab.add_special_tokens(crate::vocab::SpecialToken {
-            bos: Some(0),
-            eos: Some(1),
-            eot: None,
-            sep: None,
-            nl: None,
-            pad: None,
-            mask: None,
-            fim_pre: None,
-            fim_suf: None,
-            fim_mid: None,
-            fim_pad: None,
-        });
+        let vocab = Vocab::new(VocabType::SPM);
+        // TODO: Add special tokens
+        // vocab.add_special_tokens(crate::vocab::SpecialToken {
+        //     bos: Some(0),
+        //     eos: Some(1),
+        //     eot: None,
+        //     sep: None,
+        //     nl: None,
+        //     pad: None,
+        //     mask: None,
+        //     fim_pre: None,
+        //     fim_suf: None,
+        //     fim_mid: None,
+        //     fim_pad: None,
+        // });
 
         Self { vocab }
     }
@@ -67,7 +71,7 @@ impl WhitespaceTokenizer {
 
 #[async_trait]
 impl Tokenizer for WhitespaceTokenizer {
-    async fn tokenize(&self, text: &str, add_special: bool) -> Result<TokenizationResult, Error> {
+    async fn tokenize(&self, text: &str, add_special: bool) -> Result<TokenizationResult> {
         let mut tokens = Vec::new();
         let mut ids = Vec::new();
 
@@ -95,7 +99,7 @@ impl Tokenizer for WhitespaceTokenizer {
         Ok(TokenizationResult::new(ids, tokens))
     }
 
-    async fn decode(&self, ids: &[u32]) -> Result<String, Error> {
+    async fn decode(&self, ids: &[u32]) -> Result<String> {
         let words: Vec<&str> = ids.iter().filter_map(|&id| {
             match id {
                 0 => Some("<bos>"),

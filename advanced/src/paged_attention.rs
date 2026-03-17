@@ -7,8 +7,8 @@ use std::collections::HashMap;
 
 use tokio::sync::Mutex;
 
-use core::tensor::{Tensor, TensorType, Shape};
-use core::error::{Error, Result};
+use barq_core::tensor::{Tensor, TensorType, Shape};
+use barq_core::error::{Error, Result};
 
 /// Page in KV cache
 #[derive(Debug, Clone)]
