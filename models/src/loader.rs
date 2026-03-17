@@ -246,6 +246,12 @@ impl Model {
         self.metadata.get(key)
     }
 
+    /// Get a tensor by name (synchronous, blocking)
+    pub fn get_tensor_blocking(&self, name: &str) -> Option<Tensor> {
+        let tensors = self.tensors.try_read().ok()?;
+        tensors.get(name).cloned()
+    }
+
     /// Returns all metadata
     pub fn metadata(&self) -> &std::collections::HashMap<String, String> {
         &self.metadata
