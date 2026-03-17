@@ -354,6 +354,7 @@ mod tests {
     fn test_metrics_success_rate() {
         let metrics = InferenceMetrics::new();
 
+        metrics.total_requests.fetch_add(3, Ordering::Relaxed);
         metrics.record_success(10, 20, 1000);
         metrics.record_success(10, 20, 1000);
         metrics.record_failure();
@@ -399,7 +400,7 @@ mod tests {
     fn test_context_manager_thresholds() {
         let mut manager = ContextManager::with_thresholds(10000, 0.5, 0.8);
 
-        manager.update_tokens(4000);
+        manager.update_tokens(6000);
         assert_eq!(manager.check_health(), ContextHealth::Degraded);
 
         manager.update_tokens(9000);
