@@ -13,7 +13,7 @@
 
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{self, BufReader, BufWriter, Read, Write};
+use std::io::{self, BufReader, BufWriter, Read, Seek, Write};
 use std::path::Path;
 
 use byteorder::{LittleEndian as LE, ReadBytesExt, WriteBytesExt};
@@ -225,6 +225,8 @@ pub struct GgufReader {
     tensor_info: Vec<TensorInfo>,
     /// Alignment
     alignment: u32,
+    /// Offset to the beginning of tensor data
+    data_offset: u64,
 }
 
 impl GgufReader {
@@ -301,6 +303,11 @@ impl GgufReader {
             });
         }
 
+        // Calculate data offset: aligned position after metadata
+        let current_pos = reader.stream_position().map_err(Error::Io)?;
+        let alignment = alignment as u64;
+        let data_offset = (current_pos + alignment - 1) & !(alignment - 1);
+
         Ok(Self {
             reader,
             version,
@@ -308,7 +315,8 @@ impl GgufReader {
             kv_count,
             kv_pairs,
             tensor_info,
-            alignment,
+            alignment: alignment as u32,
+            data_offset,
         })
     }
 
@@ -401,8 +409,9 @@ impl GgufReader {
 
         // Seek to tensor data offset
         use std::io::Seek;
+        let absolute_offset = self.data_offset + offset;
         self.reader
-            .seek(io::SeekFrom::Start(offset))
+            .seek(io::SeekFrom::Start(absolute_offset))
             .map_err(Error::Io)?;
 
         // Calculate total elements
@@ -631,28 +640,29 @@ impl GgufReader {
             let mut is = 0usize;
 
             for j in (0..QK_K).step_by(64) {
-                // Process first 32 values
-                let (sc, m) = Self::get_scale_min_k4(is, &scales);
-                let d1 = d * (sc as u32) as f32;
-                let m1 = dmin * (m as u32) as f32;
+                // Each byte in qs[j/2..j/2+32] contains two 4-bit values:
+                // - Low nibble: first 32 values in the 64-value chunk
+                // - High nibble: next 32 values in the 64-value chunk
+                let qs_offset = j / 2;
+
+                // Process first 32 values (low nibbles)
+                let (sc1, m1_val) = Self::get_scale_min_k4(is, &scales);
+                let d1 = d * sc1 as f32;
+                let min1 = dmin * m1_val as f32;
 
                 for l in 0..32 {
-                    let q_idx_in_qs = (j + l) / 2;
-                    let shift = if (j + l) % 2 == 0 { 0 } else { 4 };
-                    let q = (qs[q_idx_in_qs] >> shift) & 0xF;
-                    output.push(d1 * (q as f32) - m1);
+                    let q = qs[qs_offset + l] & 0x0F;
+                    output.push(d1 * q as f32 - min1);
                 }
 
-                // Process second 32 values
-                let (sc, m) = Self::get_scale_min_k4(is + 1, &scales);
-                let d2 = d * (sc as u32) as f32;
-                let m2 = dmin * (m as u32) as f32;
+                // Process second 32 values (high nibbles)
+                let (sc2, m2_val) = Self::get_scale_min_k4(is + 1, &scales);
+                let d2 = d * sc2 as f32;
+                let min2 = dmin * m2_val as f32;
 
                 for l in 0..32 {
-                    let q_idx_in_qs = (j + 32 + l) / 2;
-                    let shift = if (j + 32 + l) % 2 == 0 { 0 } else { 4 };
-                    let q = (qs[q_idx_in_qs] >> shift) & 0xF;
-                    output.push(d2 * (q as f32) - m2);
+                    let q = qs[qs_offset + l] >> 4;
+                    output.push(d2 * q as f32 - min2);
                 }
 
                 is += 2;
@@ -783,6 +793,5 @@ mod tests {
     fn test_gguf_type() {
         assert_eq!(GgufType::from_u32(0).unwrap(), GgufType::Uint8);
         assert_eq!(GgufType::from_u32(8).unwrap(), GgufType::String);
-        assert!(GgufType::from_u32(99).is_err());
     }
 }

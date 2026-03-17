@@ -200,12 +200,12 @@ impl LlamaTransformer {
         let seq_len = hidden.len() / n_embd;
         let mut output = vec![0.0; seq_len * out_dim];
 
-        // Simplified matrix multiplication
+        // Matrix multiplication: [seq_len, n_embd] * [out_dim, n_embd]^T
         for i in 0..seq_len {
             for j in 0..out_dim {
                 let mut sum = 0.0;
                 for k in 0..n_embd {
-                    sum += hidden[i * n_embd + k] * weight_data[k * out_dim + j];
+                    sum += hidden[i * n_embd + k] * weight_data[j * n_embd + k];
                 }
                 output[i * out_dim + j] = sum;
             }
@@ -425,12 +425,12 @@ impl LlamaTransformer {
         let seq_len = hidden.len() / n_embd;
         let mut output = vec![0.0; seq_len * out_dim];
 
-        // Simplified matrix multiplication
+        // Matrix multiplication: [seq_len, n_embd] * [out_dim, n_embd]^T
         for i in 0..seq_len {
             for j in 0..out_dim {
                 let mut sum = 0.0;
                 for k in 0..n_embd {
-                    sum += hidden[i * n_embd + k] * weight_data[k * out_dim + j];
+                    sum += hidden[i * n_embd + k] * weight_data[j * n_embd + k];
                 }
                 output[i * out_dim + j] = sum;
             }
