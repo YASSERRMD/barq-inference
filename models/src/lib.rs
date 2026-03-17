@@ -11,8 +11,10 @@ pub mod loader;
 pub mod context;
 pub mod kv_cache;
 pub mod ffn;
+pub mod transformer;
 
 pub use arch::{LlmArch, LlmType};
 pub use loader::ModelLoader;
 pub use context::ModelContext;
 pub use kv_cache::{AdvancedKVCache, KVCacheStats};
+pub use transformer::LlamaTransformer;

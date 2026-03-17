@@ -3,8 +3,8 @@
 //! Efficient implementation for MoE models like Mixtral,
 //! supporting expert routing and load balancing.
 
-use core::tensor::{Tensor, TensorType};
-use core::error::{Error, Result};
+use barq_core::tensor::{Tensor, TensorType};
+use barq_core::error::{Error, Result};
 
 /// MoE configuration
 #[derive(Debug, Clone)]
