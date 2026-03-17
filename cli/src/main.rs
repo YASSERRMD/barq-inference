@@ -312,48 +312,70 @@ async fn cmd_run(
     draft_max: usize,
     speculation_preset: Option<String>,
 ) -> anyhow::Result<()> {
+    use models::{loader::Model, context::{ContextParams, ModelContext}, llama::LlamaModel};
+    use vocab::{GgufTokenizer, Tokenizer};
+    use std::sync::Arc;
+
     info!("Loading model: {:?}", model);
     info!("Prompt: {}", prompt);
     info!("Max tokens: {}", max_tokens);
 
-    // Determine if speculative decoding should be used
-    let use_speculative = speculative || draft_model.is_some();
+    // Load the model
+    let loaded_model = Model::load(&model).await?;
+    info!("Model loaded successfully");
+    info!("Architecture: {:?}", loaded_model.arch());
+    info!("Vocab size: {}", loaded_model.hparams().n_vocab);
+    info!("Embedding dim: {}", loaded_model.hparams().n_embd);
+    info!("Layers: {}", loaded_model.hparams().n_layer);
 
-    if use_speculative {
-        info!("=== Speculative Decoding Mode ===");
+    // Create tokenizer
+    let tokenizer = GgufTokenizer::from_gguf(loaded_model.metadata());
 
-        // Determine draft model path
-        let draft_path = if let Some(draft) = draft_model {
-            draft
-        } else {
-            // Auto-select draft model
-            info!("Auto-selecting draft model based on target model...");
-            model.clone()
-        };
+    // Tokenize prompt
+    let tokenization_result = tokenizer.tokenize(&prompt, true).await?;
+    let prompt_tokens: Vec<i32> = tokenization_result.ids.iter().map(|&id| id as i32).collect();
 
-        info!("Draft model: {:?}", draft_path);
-        info!("Draft max tokens: {}", draft_max);
+    info!("Prompt tokens: {}", prompt_tokens.len());
 
-        if let Some(preset) = &speculation_preset {
-            info!("Speculation preset: {}", preset);
-        }
+    // Create inference context
+    let model_arc = Arc::new(loaded_model);
+    let llama_model = LlamaModel::new(model_arc.clone())?;
+    let params = ContextParams {
+        n_ctx: context_size as u32,
+        ..Default::default()
+    };
 
-        // TODO: Implement actual speculative decoding
-        // For now, just show what would be done
-        println!("\n[Speculative Decoding]");
-        println!("Target model: {:?}", model);
-        println!("Draft model: {:?}", draft_path);
-        println!("Draft max: {}", draft_max);
-        println!("\nTODO: Integrate with SpeculativeEngine");
-        println!("Prompt: {}", prompt);
+    let context = llama_model.create_context(params)?;
+    info!("Context created");
 
-    } else {
-        info!("=== Standard Inference Mode ===");
+    // Generate tokens
+    info!("Generating {} tokens...", max_tokens);
+    let start = std::time::Instant::now();
 
-        // TODO: Implement actual inference
-        println!("Running inference...");
-        println!("Prompt: {}", prompt);
-    }
+    let generated_tokens = context.generate(
+        &prompt_tokens,
+        max_tokens,
+        temperature,
+        top_k,
+        top_p
+    ).await?;
+
+    let elapsed = start.elapsed();
+    info!("Generated {} tokens in {:.2}s ({:.2} tokens/s)",
+          generated_tokens.len(),
+          elapsed.as_secs_f64(),
+          generated_tokens.len() as f64 / elapsed.as_secs_f64());
+
+    // Decode output
+    let generated_ids: Vec<u32> = generated_tokens.iter().map(|&id| id as u32).collect();
+    let output_text = tokenizer.decode(&generated_ids).await?;
+
+    println!("\n=== Output ===");
+    println!("{}", output_text);
+    println!("\n=== Stats ===");
+    println!("Tokens generated: {}", generated_tokens.len());
+    println!("Time: {:.2}s", elapsed.as_secs_f64());
+    println!("Speed: {:.2} tokens/s", generated_tokens.len() as f64 / elapsed.as_secs_f64());
 
     Ok(())
 }
