@@ -2,8 +2,8 @@
 //!
 //! 4-bit quantization with scale per block
 
-use core::tensor::{Tensor, TensorType, Shape};
-use core::error::{Error, Result};
+use barq_core::tensor::{Tensor, TensorType, Shape};
+use barq_core::error::{Error, Result};
 
 /// Q4_0 quantization: 4-bit weights with per-block scale
 ///

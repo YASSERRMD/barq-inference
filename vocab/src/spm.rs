@@ -2,8 +2,11 @@
 
 use crate::tokenizer::Tokenizer;
 use crate::vocab::{TokenizationResult, Vocab};
+use std::pin;
+use std::future;
+use std::marker;
 use async_trait::async_trait;
-use core::error::Error;
+use anyhow::Result;
 
 /// SentencePiece tokenizer (LLaMA, Mistral, etc.)
 pub struct SentencePiece {
@@ -21,12 +24,12 @@ impl SentencePiece {
 
 #[async_trait]
 impl Tokenizer for SentencePiece {
-    async fn tokenize(&self, _text: &str, _add_special: bool) -> Result<TokenizationResult, Error> {
-        Err(Error::Unsupported("SentencePiece not yet implemented".to_string()))
+    async fn tokenize(&self, _text: &str, _add_special: bool) -> Result<TokenizationResult> {
+        Err(anyhow::anyhow!("SentencePiece not yet implemented"))
     }
 
-    async fn decode(&self, _ids: &[u32]) -> Result<String, Error> {
-        Err(Error::Unsupported("SentencePiece not yet implemented".to_string()))
+    async fn decode(&self, _ids: &[u32]) -> Result<String> {
+        Err(anyhow::anyhow!("SentencePiece not yet implemented"))
     }
 
     fn vocab(&self) -> &Vocab {

@@ -9,11 +9,11 @@ pub mod prompt_cache;
 pub mod rope_scaling;
 pub mod moe;
 pub mod tensor_parallel;
-pub mod metrics;
-pub mod metrics_server;
 pub mod uds_server;
 pub mod continuous_batching;
+pub mod metrics;
 pub mod logging;
+// pub mod metrics_server;  // TODO: Fix hyper compatibility issues
 
 pub use speculative::SpeculativeDecoding;
 pub use flash_attention::FlashAttention;
@@ -22,3 +22,8 @@ pub use prompt_cache::PromptCache;
 pub use rope_scaling::{RopeScaling, YaRNScaling};
 pub use moe::MoEInference;
 pub use tensor_parallel::TensorParallel;
+pub use uds_server::{InferenceServer, InferenceClient, InferenceRequest, InferenceResponse, ServerConfig};
+pub use continuous_batching::{BatchScheduler, Batch, ContinuousBatchingConfig};
+pub use metrics::{InferenceMetrics, MetricsHandle, RequestGuard, HealthCheck, MetricsResponse, check_context_health, ContextManager, ContextHealth};
+pub use logging::{Logger, RequestLogger, LogLevel, LoggingConfig, init_logger, logger};
+// pub use metrics_server::{MetricsServer, MetricsServerConfig, PrometheusExporter};

@@ -2,8 +2,8 @@
 //!
 //! More sophisticated 4-bit quantization with separate scales for min/max
 
-use core::tensor::{Tensor, TensorType, Shape};
-use core::error::{Error, Result};
+use barq_core::tensor::{Tensor, TensorType, Shape};
+use barq_core::error::{Error, Result};
 
 /// Q4_K quantization: 4-bit with min/max scaling
 ///

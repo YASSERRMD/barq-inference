@@ -1,7 +1,7 @@
 //! Top-p (nucleus) sampling implementation
 
 use crate::sampler::{Sampler, SamplerType, TokenData};
-use core::error::{Error, Result};
+use barq_core::error::{Error, Result};
 
 /// Top-p (nucleus) sampler
 ///
