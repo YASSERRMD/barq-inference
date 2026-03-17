@@ -557,17 +557,20 @@ impl GgufReader {
     }
 
     /// Load Q4_K_M quantized tensor and dequantize to f32
-    /// Simplified implementation based on Q4_K format
+    /// Implementation matching llama.cpp ggml-quants.c exactly
     fn load_q4_k(&mut self, _dimensions: &[u64], total_elements: usize) -> Result<crate::tensor::TensorData> {
-        let block_size = 256; // Q4_K block size
-        let n_blocks = (total_elements + block_size - 1) / block_size;
+        const QK_K: usize = 256; // Q4_K block size
 
-        // Q4_K_M format (simplified):
-        // - scales (2 x f16 = 4 bytes)
-        // - minima (8 x u8 = 8 bytes)
-        // - quants (128 bytes for 256 values)
-        let bytes_per_block = 4 + 8 + 128;
-        let total_bytes = n_blocks * bytes_per_block;
+        let n_blocks = (total_elements + QK_K - 1) / QK_K;
+
+        // Q4_K format per 256 values (from llama.cpp block_q4_K):
+        // - d (f16): 2 bytes (main scale)
+        // - dmin (f16): 2 bytes (main minimum)
+        // - scales[12]: 12 bytes (packed scale/minimum values)
+        // - qs[QK_K/4]: 64 bytes (4-bit packed quantized values)
+        // Total: 80 bytes per 256-value block
+        const BYTES_PER_BLOCK: usize = 2 + 2 + 12 + (QK_K / 4);
+        let total_bytes = n_blocks * BYTES_PER_BLOCK;
 
         let mut data = vec![0u8; total_bytes];
         self.reader.read_exact(&mut data).map_err(|e| Error::Io(e))?;
@@ -575,45 +578,86 @@ impl GgufReader {
         let mut output = Vec::with_capacity(total_elements);
         let mut offset = 0;
 
-        for _ in 0..n_blocks {
+        for _block_idx in 0..n_blocks {
+            if offset + BYTES_PER_BLOCK > data.len() {
+                break;
+            }
+
+            // Read d (main scale as f16)
+            let d_bytes = [data[offset], data[offset + 1]];
+            let d = half::f16::from_le_bytes(d_bytes).to_f32();
+            offset += 2;
+
+            // Read dmin (main minimum as f16)
+            let dmin_bytes = [data[offset], data[offset + 1]];
+            let dmin = half::f16::from_le_bytes(dmin_bytes).to_f32();
+            offset += 2;
+
+            // Read scales[12] (packed 6-bit scale/minimum values)
+            let mut scales = [0u8; 12];
             if offset + 12 > data.len() {
                 break;
             }
+            scales.copy_from_slice(&data[offset..offset + 12]);
+            offset += 12;
 
-            // Read scales (2 x f16)
-            let scale1 = half::f16::from_le_bytes([data[offset], data[offset + 1]]).to_f32();
-            let scale2 = half::f16::from_le_bytes([data[offset + 2], data[offset + 3]]).to_f32();
-            offset += 4;
-
-            // Skip minima for now (simplified)
-            offset += 8;
-
-            // Read quantized values (128 bytes for 256 values)
-            if offset + 128 > data.len() {
+            // Read qs[QK_K/4] (4-bit packed quantized values)
+            const QS_LEN: usize = QK_K / 4;
+            let mut qs = [0u8; QS_LEN];
+            if offset + QS_LEN > data.len() {
                 break;
             }
+            qs.copy_from_slice(&data[offset..offset + QS_LEN]);
+            offset += qs.len();
 
-            let quants = &data[offset..offset + 128];
-            offset += 128;
+            // Dequantize: matching llama.cpp dequantize_row_q4_K()
+            let mut is = 0usize;
 
-            // Dequantize block (simplified)
-            for i in 0..block_size {
-                let byte_idx = i / 2;
-                let shift = if i % 2 == 0 { 0 } else { 4 };
+            for j in (0..QK_K).step_by(64) {
+                // Process first 32 values
+                let (sc, m) = Self::get_scale_min_k4(is + 0, &scales);
+                let d1 = d * (sc as u32) as f32;
+                let m1 = dmin * (m as u32) as f32;
 
-                if byte_idx < quants.len() {
-                    let q = ((quants[byte_idx] >> shift) & 0x0F) as i8;
-                    let q = if q >= 8 { q - 16 } else { q }; // Convert to signed
-
-                    // Use average of two scales
-                    let scale = (scale1 + scale2) / 2.0;
-                    output.push(q as f32 * scale);
+                for l in 0..32 {
+                    let q_idx_in_qs = (j + l) / 2;
+                    let shift = if (j + l) % 2 == 0 { 0 } else { 4 };
+                    let q = (qs[q_idx_in_qs] >> shift) & 0xF;
+                    output.push(d1 * (q as f32) - m1);
                 }
+
+                // Process second 32 values
+                let (sc, m) = Self::get_scale_min_k4(is + 1, &scales);
+                let d2 = d * (sc as u32) as f32;
+                let m2 = dmin * (m as u32) as f32;
+
+                for l in 0..32 {
+                    let q_idx_in_qs = (j + 32 + l) / 2;
+                    let shift = if (j + 32 + l) % 2 == 0 { 0 } else { 4 };
+                    let q = (qs[q_idx_in_qs] >> shift) & 0xF;
+                    output.push(d2 * (q as f32) - m2);
+                }
+
+                is += 2;
             }
         }
 
         output.truncate(total_elements);
         Ok(crate::tensor::TensorData::F32(output))
+    }
+
+    /// Helper function matching llama.cpp get_scale_min_k4()
+    /// Extracts 6-bit scale and minimum values from packed format
+    fn get_scale_min_k4(j: usize, q: &[u8]) -> (u8, u8) {
+        if j < 4 {
+            let d = q[j] & 63;
+            let m = q[j + 4] & 63;
+            (d, m)
+        } else {
+            let d = (q[j + 4] & 0xF) | ((q[j - 4] >> 6) << 4);
+            let m = (q[j + 4] >> 4) | ((q[j - 0] >> 6) << 4);
+            (d, m)
+        }
     }
 }
 
