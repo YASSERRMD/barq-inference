@@ -6,7 +6,6 @@
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::sync::RwLock;
 
 /// Log level
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -165,7 +164,7 @@ impl RequestLogger {
             return;
         }
 
-        let mut entry = LogEntry {
+        let entry = LogEntry {
             timestamp: current_timestamp_ms(),
             level: level.as_str().to_string(),
             message: message.to_string(),

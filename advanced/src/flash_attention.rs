@@ -11,7 +11,7 @@
 //! - SIMD-friendly operations for better vectorization
 
 use barq_core::error::{Error, Result};
-use barq_core::tensor::{Shape, Tensor, TensorData, TensorType};
+use barq_core::tensor::{Tensor, TensorData, TensorType};
 
 /// Flash Attention-2 configuration
 #[derive(Debug, Clone)]
@@ -86,12 +86,12 @@ impl FlashAttention {
             self.forward_batch(b, q_data, k_data, v_data, seq_len, &mut output)?;
         }
 
-        Ok(Tensor::new(
+        Tensor::new(
             None,
             TensorType::F32,
             shape.clone(),
             TensorData::F32(output),
-        )?)
+        )
     }
 
     /// Compute attention with causal masking (alias for clarity)
@@ -185,7 +185,7 @@ impl FlashAttention {
         let mut m = vec![f32::NEG_INFINITY; seq_len];
 
         // Process Key/Value in blocks (tr blocks)
-        let num_tr_blocks = (seq_len + block_size - 1) / block_size;
+        let num_tr_blocks = seq_len.div_ceil(block_size);
 
         for tr_block_idx in 0..num_tr_blocks {
             let tr_start = tr_block_idx * block_size;
@@ -274,6 +274,7 @@ impl FlashAttention {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use barq_core::tensor::Shape;
 
     #[test]
     fn test_flash_attention_config() {
@@ -299,7 +300,7 @@ mod tests {
 
         let fa = FlashAttention::new(16, 64).with_config(config);
         assert_eq!(fa.config.block_size_qk, 64);
-        assert_eq!(fa.config.causal, false);
+        assert!(!fa.config.causal);
     }
 
     #[test]
@@ -307,9 +308,9 @@ mod tests {
         let fa = FlashAttention::new(2, 4);
 
         // Create test tensors [batch=1, seq=2, heads=2, head_dim=4]
-        let q_data = vec![1.0f32; 1 * 2 * 2 * 4];
-        let k_data = vec![2.0f32; 1 * 2 * 2 * 4];
-        let v_data = vec![3.0f32; 1 * 2 * 2 * 4];
+        let q_data = vec![1.0f32; 2 * 2 * 4];
+        let k_data = vec![2.0f32; 2 * 2 * 4];
+        let v_data = vec![3.0f32; 2 * 2 * 4];
 
         let q_shape = Shape::new(vec![1, 2, 2, 4]);
         let k_shape = Shape::new(vec![1, 2, 2, 4]);

@@ -39,7 +39,7 @@ pub enum TokenType {
 }
 
 /// Token attributes
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 pub struct TokenAttr {
     /// Normalized token
     pub normalized: bool,
@@ -51,19 +51,8 @@ pub struct TokenAttr {
     pub single_word: bool,
 }
 
-impl Default for TokenAttr {
-    fn default() -> Self {
-        Self {
-            normalized: false,
-            lstrip: false,
-            rstrip: false,
-            single_word: false,
-        }
-    }
-}
-
 /// Special tokens
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SpecialToken {
     /// Beginning of sentence
     pub bos: Option<TokenId>,
@@ -87,24 +76,6 @@ pub struct SpecialToken {
     pub fim_mid: Option<TokenId>,
     /// Pad for infill
     pub fim_pad: Option<TokenId>,
-}
-
-impl Default for SpecialToken {
-    fn default() -> Self {
-        Self {
-            bos: None,
-            eos: None,
-            eot: None,
-            sep: None,
-            nl: None,
-            pad: None,
-            mask: None,
-            fim_pre: None,
-            fim_suf: None,
-            fim_mid: None,
-            fim_pad: None,
-        }
-    }
 }
 
 /// Vocabulary

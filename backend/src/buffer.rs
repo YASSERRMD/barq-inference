@@ -67,7 +67,7 @@ impl CpuBuffer {
     }
 
     pub fn from_vec(buffer_type: BufferType, dtype: TensorType, data: Vec<u8>) -> Result<Self> {
-        if data.len() % dtype.size() != 0 {
+        if !data.len().is_multiple_of(dtype.size()) {
             return Err(Error::tensor("Data size not aligned with dtype"));
         }
 

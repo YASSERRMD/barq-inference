@@ -6,11 +6,8 @@
 //! Expected gain: 4-6x aggregate TPS at 8 concurrent requests
 
 use std::collections::VecDeque;
-use std::sync::Arc;
-use tokio::sync::Mutex;
 
 use barq_core::error::{Error, Result};
-use barq_core::tensor::Tensor;
 
 /// Active sequence in batch
 #[derive(Debug)]

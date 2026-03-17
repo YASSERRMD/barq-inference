@@ -58,7 +58,7 @@ mod tests {
 
         // Check all values are in [0, 1]
         for &p in &result {
-            assert!(p >= 0.0 && p <= 1.0);
+            assert!((0.0..=1.0).contains(&p));
         }
 
         // Check ordering is preserved

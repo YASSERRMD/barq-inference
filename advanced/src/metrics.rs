@@ -5,7 +5,7 @@
 
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use serde::Serialize;
 
@@ -126,7 +126,7 @@ pub struct RequestGuard {
 }
 
 impl RequestGuard {
-    pub fn complete(mut self, prompt_tokens: usize, generated_tokens: usize) {
+    pub fn complete(self, prompt_tokens: usize, generated_tokens: usize) {
         if let Some(weak) = &self.metrics {
             if let Some(metrics) = weak.upgrade() {
                 let duration = self.start.elapsed();
@@ -211,8 +211,6 @@ impl InferenceMetrics {
 
 /// Get process uptime in seconds
 fn get_process_uptime() -> f64 {
-    use std::time::Instant;
-
     // This would need to be stored at application start
     // For now, return a placeholder
     0.0

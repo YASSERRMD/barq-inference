@@ -9,7 +9,7 @@ pub fn rope(
     freq_base: f32,
     scale: f32,
 ) -> Result<(Vec<f32>, Vec<f32>)> {
-    if dim % 2 != 0 {
+    if !dim.is_multiple_of(2) {
         return Err(Error::tensor("RoPE dimension must be even"));
     }
 

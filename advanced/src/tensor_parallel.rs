@@ -9,7 +9,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use barq_core::error::{Error, Result};
-use barq_core::tensor::{Shape, Tensor, TensorType};
+use barq_core::tensor::{Shape, Tensor};
 
 /// Device ID type
 pub type DeviceId = usize;
@@ -80,7 +80,7 @@ impl TensorParallel {
         let n_devices = self.config.n_devices;
         let dim_size = dims[dim];
 
-        if dim_size % n_devices != 0 {
+        if !dim_size.is_multiple_of(n_devices) {
             return Err(Error::tensor(format!(
                 "Dimension {} (size {}) not divisible by n_devices {}",
                 dim, dim_size, n_devices

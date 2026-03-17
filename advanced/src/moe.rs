@@ -4,7 +4,7 @@
 //! supporting expert routing and load balancing.
 
 use barq_core::error::{Error, Result};
-use barq_core::tensor::{Tensor, TensorType};
+use barq_core::tensor::Tensor;
 
 /// MoE configuration
 #[derive(Debug, Clone)]
@@ -121,6 +121,7 @@ impl MoEInference {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use barq_core::TensorType;
 
     #[test]
     fn test_moe_config() {

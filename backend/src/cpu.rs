@@ -7,7 +7,7 @@ use rayon::prelude::*;
 use crate::buffer::{Buffer, CpuBuffer};
 use crate::device::CpuDevice;
 use barq_core::error::{Error, Result};
-use barq_core::tensor::{Shape, Tensor, TensorType};
+use barq_core::tensor::TensorType;
 
 /// CPU backend
 pub struct CpuBackend {

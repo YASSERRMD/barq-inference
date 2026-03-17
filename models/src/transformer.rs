@@ -487,7 +487,6 @@ impl LlamaTransformer {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
 
     #[test]
     fn test_llama_transformer_creation() {

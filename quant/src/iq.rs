@@ -4,7 +4,6 @@
 //! Reference: ik_llama.cpp/ggml/src/iqk/iqk_quantize.cpp
 
 use barq_core::error::{Error, Result};
-use barq_core::tensor::{Tensor, TensorType};
 use half::f16;
 
 /// The non-linear 4-bit value lookup table for IQ4_KS.
@@ -133,7 +132,7 @@ pub fn dequantize_iq4_ks(data: &[u8], n_elements: usize) -> Result<Vec<f32>> {
     // Remaining bytes are block_iq4_ks structures
     // Each block = 8 (scales) + 128 (qs) = 136 bytes for 256 values
     let block_bytes = 8 + 128; // sizeof(block_iq4_ks)
-    let n_blocks = (n_elements + QK_K - 1) / QK_K;
+    let n_blocks = n_elements.div_ceil(QK_K);
     let block_data = &data[4..];
 
     if block_data.len() < n_blocks * block_bytes {
@@ -236,12 +235,12 @@ mod tests {
         assert_eq!(result.len(), 256);
         // All qs nibbles are 0x0 → IQ4K_VALUES[0] = -127
         // dl = 1.0 * 1 = 1.0; value[0] = -127
-        let expected = 1.0 * (-127i8 as f32);
+        let expected = 1.0 * -127_f32;
         for val in &result[0..32] {
             assert_eq!(*val, expected, "Expected {}, got {}", expected, val);
         }
         // Remaining 7 sub-blocks have scale_byte = 0 → scale_level = 0 - 127 = -127 → dl = -127
-        let expected_rest = 1.0 * (-127i8 as f32) * (-127f32);
+        let expected_rest = 1.0 * -127_f32 * (-127f32);
         for val in &result[32..] {
             assert_eq!(*val, expected_rest);
         }

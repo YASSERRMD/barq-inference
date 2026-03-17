@@ -164,7 +164,7 @@ fn is_apple_silicon() -> bool {
     use std::process::Command;
 
     let output = Command::new("sysctl")
-        .args(&["-n", "machdep.cpu.brand_string"])
+        .args(["-n", "machdep.cpu.brand_string"])
         .output();
 
     match output {
@@ -182,7 +182,7 @@ fn get_apple_gpu_name() -> String {
     use std::process::Command;
 
     let output = Command::new("system_profiler")
-        .args(&["SPDisplaysDataType", "-json"])
+        .args(["SPDisplaysDataType", "-json"])
         .output();
 
     match output {
@@ -208,7 +208,7 @@ fn get_apple_gpu_cores() -> usize {
     use std::process::Command;
 
     let output = Command::new("system_profiler")
-        .args(&["SPHardwareDataType", "-json"])
+        .args(["SPHardwareDataType", "-json"])
         .output();
 
     match output {
@@ -236,7 +236,7 @@ fn get_apple_gpu_cores() -> usize {
 fn get_apple_gpu_memory() -> usize {
     use std::process::Command;
 
-    let output = Command::new("sysctl").args(&["-n", "hw.memsize"]).output();
+    let output = Command::new("sysctl").args(["-n", "hw.memsize"]).output();
 
     match output {
         Ok(output) => {
@@ -301,7 +301,7 @@ fn get_system_memory_mb() -> usize {
     {
         use std::process::Command;
 
-        let output = Command::new("sysctl").args(&["-n", "hw.memsize"]).output();
+        let output = Command::new("sysctl").args(["-n", "hw.memsize"]).output();
 
         match output {
             Ok(output) => {
@@ -365,7 +365,7 @@ mod tests {
     #[test]
     fn test_device_info() {
         let device = get_device_info();
-        assert!(device.compute_units >= 0);
-        assert!(device.memory_mb >= 0);
+        assert!(device.compute_units > 0);
+        assert!(device.memory_mb > 0);
     }
 }

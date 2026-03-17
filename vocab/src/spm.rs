@@ -4,13 +4,16 @@ use crate::tokenizer::Tokenizer;
 use crate::vocab::{TokenizationResult, Vocab};
 use anyhow::Result;
 use async_trait::async_trait;
-use std::future;
-use std::marker;
-use std::pin;
 
 /// SentencePiece tokenizer (LLaMA, Mistral, etc.)
 pub struct SentencePiece {
     vocab: Vocab,
+}
+
+impl Default for SentencePiece {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl SentencePiece {

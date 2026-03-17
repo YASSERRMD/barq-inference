@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use tokio::sync::Mutex;
 
 use barq_core::error::{Error, Result};
-use barq_core::tensor::{Shape, Tensor, TensorType};
+use barq_core::tensor::Tensor;
 
 /// Page in KV cache
 #[derive(Debug, Clone)]
@@ -174,7 +174,7 @@ impl PagedAttention {
                 if new_id < old_id {
                     // Extract data from old page before any other mut borrows
                     let old_ref_count = pages[old_id].as_ref().map(|p| p.ref_count).unwrap_or(0);
-                    let old_data = pages[old_id].as_mut().map(|p| p.data.take()).flatten();
+                    let old_data = pages[old_id].as_mut().and_then(|p| p.data.take());
 
                     if let Some(data) = old_data {
                         if let Some(Some(new_page)) = pages.get_mut(new_id) {

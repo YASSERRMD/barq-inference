@@ -2,7 +2,7 @@
 
 use barq_core::error::{Error, Result};
 use barq_core::ops::{BinaryOp, UnaryOp};
-use barq_core::tensor::{Shape, Tensor, TensorType};
+use barq_core::tensor::Tensor;
 
 /// Tensor operation type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -119,7 +119,7 @@ impl TensorOps for CpuTensorOps {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use barq_core::tensor::TensorData;
+    use barq_core::tensor::{Shape, Tensor, TensorData, TensorType};
 
     #[test]
     fn test_tensor_ops() {

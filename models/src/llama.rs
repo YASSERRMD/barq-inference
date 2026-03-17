@@ -1,10 +1,9 @@
 //! LLaMA model implementation
 
 use crate::arch::LlmArch;
-use crate::context::{Batch, ContextParams, ModelContext};
+use crate::context::{ContextParams, ModelContext};
 use crate::loader::Model;
 use barq_core::error::{Error, Result};
-use barq_core::tensor::{Shape, Tensor, TensorType};
 use std::sync::Arc;
 
 /// LLaMA model specific implementations
@@ -38,7 +37,6 @@ impl LlamaModel {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
 
     #[test]
     fn test_llama_creation() {

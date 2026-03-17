@@ -2,8 +2,7 @@
 //!
 //! More sophisticated 4-bit quantization with separate scales for min/max
 
-use barq_core::error::{Error, Result};
-use barq_core::tensor::{Shape, Tensor, TensorType};
+use barq_core::error::Result;
 
 /// Q4_K quantization: 4-bit with min/max scaling
 ///
@@ -23,7 +22,7 @@ impl Q4_K {
 
     pub fn quantize(&self, input: &[f32]) -> Result<Vec<u8>> {
         let block_size = self.block_size;
-        let n_blocks = (input.len() + block_size - 1) / block_size;
+        let n_blocks = input.len().div_ceil(block_size);
 
         let mut output = Vec::new();
 
@@ -45,14 +44,14 @@ impl Q4_K {
             let scale_max = max_val - min_val;
 
             // Quantize block to 4-bit
-            let mut quants = vec![0u8; (block.len() + 1) / 2];
+            let mut quants = vec![0u8; block.len().div_ceil(2)];
 
             for (i, &val) in block.iter().enumerate() {
                 // Normalize to [0, 15] range
                 let normalized = if scale_max == 0.0 {
                     7.5f32
                 } else {
-                    ((val - scale_min) / scale_max * 15.0)
+                    (val - scale_min) / scale_max * 15.0
                 };
 
                 let q = normalized.round().clamp(0.0, 15.0) as u8;
@@ -60,7 +59,7 @@ impl Q4_K {
                 // Pack two 4-bit values into one byte
                 let byte_idx = i / 2;
                 let shift = if i % 2 == 0 { 0 } else { 4 };
-                quants[byte_idx] |= (q << shift);
+                quants[byte_idx] |= q << shift;
             }
 
             // Output scale_min
@@ -78,7 +77,7 @@ impl Q4_K {
 
     pub fn dequantize(&self, input: &[u8], output_size: usize) -> Result<Vec<f32>> {
         let block_size = self.block_size;
-        let n_blocks = (output_size + block_size - 1) / block_size;
+        let n_blocks = output_size.div_ceil(block_size);
 
         let mut output = Vec::with_capacity(output_size);
         let mut offset = 0;
@@ -106,7 +105,7 @@ impl Q4_K {
             offset += 4;
 
             // Read quantized values
-            let q_len = (block_size + 1) / 2;
+            let q_len = block_size.div_ceil(2);
             if offset + q_len > input.len() {
                 break;
             }

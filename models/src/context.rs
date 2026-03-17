@@ -6,10 +6,9 @@ use std::sync::Arc;
 
 use tokio::sync::Mutex;
 
-use crate::arch::LlmArch;
 use crate::loader::Model;
 use barq_core::error::{Error, Result};
-use barq_core::tensor::{Shape, Tensor, TensorType};
+use barq_core::tensor::Tensor;
 
 /// Inference context parameters
 #[derive(Debug, Clone)]

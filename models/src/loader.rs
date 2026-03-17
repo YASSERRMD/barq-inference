@@ -6,12 +6,11 @@ use std::path::Path;
 use std::sync::Arc;
 
 use tokio::fs::File;
-use tokio::io::BufReader;
 
 use crate::arch::LlmArch;
 use barq_core::error::{Error, Result};
 use barq_core::gguf::GgufReader;
-use barq_core::tensor::{Shape, Tensor, TensorType};
+use barq_core::tensor::Tensor;
 
 /// Model hyperparameters
 #[derive(Debug, Clone)]
@@ -72,7 +71,7 @@ impl Model {
     /// Load a model from a GGUF file
     pub async fn load<P: AsRef<Path>>(path: P) -> Result<Self> {
         let path_str = path.as_ref().to_string_lossy().to_string();
-        let _file = File::open(&path_str).await.map_err(|e| Error::Io(e))?;
+        let _file = File::open(&path_str).await.map_err(Error::Io)?;
         // For now, we'll use synchronous GGUF reading
         // In production, this should be fully async
 

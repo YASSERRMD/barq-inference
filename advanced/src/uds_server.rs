@@ -5,10 +5,9 @@
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
-use tokio::sync::{mpsc, oneshot, Semaphore};
+use tokio::sync::{mpsc, oneshot};
 
 use barq_core::error::{Error, Result};
 
@@ -191,16 +190,13 @@ impl InferenceServer {
                     };
                     error_resp
                 }
-                Err(_) => {
-                    let error_resp = InferenceResponse {
-                        id: request.id,
-                        text: "Request cancelled".to_string(),
-                        tokens_generated: 0,
-                        ttft_ms: 0,
-                        total_time_ms: 0,
-                    };
-                    error_resp
-                }
+                Err(_) => InferenceResponse {
+                    id: request.id,
+                    text: "Request cancelled".to_string(),
+                    tokens_generated: 0,
+                    ttft_ms: 0,
+                    total_time_ms: 0,
+                },
             };
 
             // Send response
