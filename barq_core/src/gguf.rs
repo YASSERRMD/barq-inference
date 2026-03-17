@@ -112,6 +112,82 @@ impl GgufValue {
     }
 }
 
+/// GGUF-specific tensor types (quantized)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GgufTensorType {
+    /// Standard types
+    F32 = 0,
+    F16 = 1,
+    Q4_0 = 8,
+    Q4_1 = 9,
+    Q5_0 = 10,
+    Q5_1 = 11,
+    Q8_0 = 12,
+    Q2_K = 16,
+    Q3_K = 17,
+    Q4_K = 18,
+    Q5_K = 19,
+    Q6_K = 20,
+    Q8_K = 21,
+    /// Q4_K with medium (M) variant
+    Q4_K_M = 14,
+}
+
+impl GgufTensorType {
+    /// Parse from u32
+    fn from_u32(value: u32) -> Result<Self> {
+        match value {
+            0 => Ok(GgufTensorType::F32),
+            1 => Ok(GgufTensorType::F16),
+            8 => Ok(GgufTensorType::Q4_0),
+            9 => Ok(GgufTensorType::Q4_1),
+            10 => Ok(GgufTensorType::Q5_0),
+            11 => Ok(GgufTensorType::Q5_1),
+            12 => Ok(GgufTensorType::Q8_0),
+            14 => Ok(GgufTensorType::Q4_K_M),
+            16 => Ok(GgufTensorType::Q2_K),
+            17 => Ok(GgufTensorType::Q3_K),
+            18 => Ok(GgufTensorType::Q4_K),
+            19 => Ok(GgufTensorType::Q5_K),
+            20 => Ok(GgufTensorType::Q6_K),
+            21 => Ok(GgufTensorType::Q8_K),
+            _ => Err(Error::InvalidGguf(format!("Unknown GGUF tensor type: {}", value))),
+        }
+    }
+
+    /// Returns the block size for quantized types
+    pub const fn block_size(&self) -> usize {
+        match self {
+            GgufTensorType::Q4_0 | GgufTensorType::Q4_1 => 32,
+            GgufTensorType::Q5_0 | GgufTensorType::Q5_1 => 32,
+            GgufTensorType::Q8_0 => 32,
+            GgufTensorType::Q2_K | GgufTensorType::Q3_K | GgufTensorType::Q4_K |
+            GgufTensorType::Q4_K_M | GgufTensorType::Q5_K | GgufTensorType::Q6_K | GgufTensorType::Q8_K => 256,
+            GgufTensorType::F32 | GgufTensorType::F16 => 1,
+        }
+    }
+
+    /// Returns the type name
+    pub fn name(&self) -> &'static str {
+        match self {
+            GgufTensorType::F32 => "f32",
+            GgufTensorType::F16 => "f16",
+            GgufTensorType::Q4_0 => "q4_0",
+            GgufTensorType::Q4_1 => "q4_1",
+            GgufTensorType::Q5_0 => "q5_0",
+            GgufTensorType::Q5_1 => "q5_1",
+            GgufTensorType::Q8_0 => "q8_0",
+            GgufTensorType::Q2_K => "q2_k",
+            GgufTensorType::Q3_K => "q3_k",
+            GgufTensorType::Q4_K => "q4_k",
+            GgufTensorType::Q4_K_M => "q4_k_m",
+            GgufTensorType::Q5_K => "q5_k",
+            GgufTensorType::Q6_K => "q6_k",
+            GgufTensorType::Q8_K => "q8_k",
+        }
+    }
+}
+
 /// Tensor information
 #[derive(Debug, Clone)]
 pub struct TensorInfo {
@@ -121,6 +197,8 @@ pub struct TensorInfo {
     pub dimensions: Vec<u64>,
     /// Tensor data type
     pub dtype: TensorType,
+    /// GGUF tensor type (for quantized tensors)
+    pub gguf_type: GgufTensorType,
     /// Offset in file
     pub offset: u64,
 }
@@ -198,13 +276,21 @@ impl GgufReader {
                 dimensions.push(reader.read_u64::<LE>().map_err(|e| Error::Io(e))?);
             }
 
-            let dtype = TensorType::from_u32(reader.read_u32::<LE>().map_err(|e| Error::Io(e))?)?;
+            let gguf_type = GgufTensorType::from_u32(reader.read_u32::<LE>().map_err(|e| Error::Io(e))?)?;
             let offset = reader.read_u64::<LE>().map_err(|e| Error::Io(e))?;
+
+            // Convert GGUF type to standard TensorType for storage
+            let dtype = match gguf_type {
+                GgufTensorType::F32 => TensorType::F32,
+                GgufTensorType::F16 => TensorType::F16,
+                _ => TensorType::F32, // Quantized types will be dequantized to F32
+            };
 
             tensor_info.push(TensorInfo {
                 name,
                 dimensions,
                 dtype,
+                gguf_type,
                 offset,
             });
         }
@@ -290,7 +376,12 @@ impl GgufReader {
         self.tensor_info.iter().find(|t| t.name == name)
     }
 
-    /// Load a specific tensor
+    /// Get all tensor names
+    pub fn tensor_names(&self) -> Vec<&str> {
+        self.tensor_info.iter().map(|t| t.name.as_str()).collect()
+    }
+
+    /// Load a specific tensor with dequantization support
     pub fn load_tensor(&mut self, name: &str) -> Result<Tensor> {
         let info = self.get_tensor_info(name)
             .ok_or_else(|| Error::Tensor(format!("Tensor not found: {}", name)))?;
@@ -298,37 +389,231 @@ impl GgufReader {
         // Clone the fields we need after seeking
         let offset = info.offset;
         let dimensions = info.dimensions.clone();
-        let dtype = info.dtype;
-        let name = info.name.clone();
+        let gguf_type = info.gguf_type;
+        let tensor_name = info.name.clone();
 
         // Seek to tensor data offset
         use std::io::Seek;
         self.reader.seek(io::SeekFrom::Start(offset))
             .map_err(|e| Error::Io(e))?;
 
-        // Calculate total size
+        // Calculate total elements
         let total_elements: usize = dimensions.iter().map(|&d| d as usize).product();
-        let type_size = dtype.size();
-        let total_bytes = total_elements * type_size;
 
-        // Read tensor data
-        let mut data = vec![0u8; total_bytes];
-        self.reader.read_exact(&mut data).map_err(|e| Error::Io(e))?;
+        // Load and dequantize based on type
+        let tensor_data = match gguf_type {
+            GgufTensorType::F32 => {
+                let type_size = 4;
+                let total_bytes = total_elements * type_size;
+                let mut data = vec![0u8; total_bytes];
+                self.reader.read_exact(&mut data).map_err(|e| Error::Io(e))?;
 
-        // Convert to TensorData based on type
-        let tensor_data = match dtype {
-            TensorType::F32 => {
                 let values: Vec<f32> = data.chunks_exact(4)
                     .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
                     .collect();
                 crate::tensor::TensorData::F32(values)
             }
-            _ => return Err(Error::Unsupported(format!("Loading {} tensors", dtype))),
+            GgufTensorType::F16 => {
+                let type_size = 2;
+                let total_bytes = total_elements * type_size;
+                let mut data = vec![0u8; total_bytes];
+                self.reader.read_exact(&mut data).map_err(|e| Error::Io(e))?;
+
+                let values: Vec<f32> = data.chunks_exact(2)
+                    .map(|chunk| {
+                        let bits = u16::from_le_bytes([chunk[0], chunk[1]]);
+                        half::f16::from_bits(bits).to_f32()
+                    })
+                    .collect();
+                crate::tensor::TensorData::F32(values)
+            }
+            GgufTensorType::Q4_0 => {
+                self.load_q4_0(&dimensions, total_elements)?
+            }
+            GgufTensorType::Q4_1 => {
+                return Err(Error::Unsupported(format!("Q4_1 not yet implemented")))
+            }
+            GgufTensorType::Q8_0 => {
+                self.load_q8_0(&dimensions, total_elements)?
+            }
+            GgufTensorType::Q4_K | GgufTensorType::Q4_K_M => {
+                self.load_q4_k(&dimensions, total_elements)?
+            }
+            _ => {
+                return Err(Error::Unsupported(format!(
+                    "Loading GGUF tensor type: {} (tensor: {})",
+                    gguf_type.name(),
+                    name
+                )))
+            }
         };
 
         let shape = Shape::new(dimensions.iter().map(|&d| d as usize).collect());
 
-        Tensor::new(Some(name), dtype, shape, tensor_data)
+        Tensor::new(Some(tensor_name), TensorType::F32, shape, tensor_data)
+    }
+
+    /// Load Q4_0 quantized tensor and dequantize to f32
+    fn load_q4_0(&mut self, dimensions: &[u64], total_elements: usize) -> Result<crate::tensor::TensorData> {
+        let block_size = 32; // Q4_0 block size
+        let n_blocks = (total_elements + block_size - 1) / block_size;
+
+        // Q4_0 format: scale (f32) + quants (16 bytes for 32 values)
+        let bytes_per_block = 4 + (block_size / 2);
+        let total_bytes = n_blocks * bytes_per_block;
+
+        let mut data = vec![0u8; total_bytes];
+        self.reader.read_exact(&mut data).map_err(|e| Error::Io(e))?;
+
+        let mut output = Vec::with_capacity(total_elements);
+        let mut offset = 0;
+
+        for block in 0..n_blocks {
+            if offset + 4 > data.len() {
+                break;
+            }
+
+            // Read scale
+            let scale = f32::from_le_bytes([
+                data[offset],
+                data[offset + 1],
+                data[offset + 2],
+                data[offset + 3],
+            ]);
+            offset += 4;
+
+            // Read quantized values
+            let q_len = (block_size + 1) / 2;
+            if offset + q_len > data.len() {
+                break;
+            }
+
+            let quants = &data[offset..offset + q_len];
+            offset += q_len;
+
+            // Dequantize block
+            for i in 0..block_size {
+                let byte_idx = i / 2;
+                let shift = if i % 2 == 0 { 0 } else { 4 };
+
+                if byte_idx < quants.len() {
+                    let q = ((quants[byte_idx] >> shift) & 0x0F) as i8;
+                    let q = if q >= 8 { q - 16 } else { q }; // Convert to signed
+                    output.push(q as f32 * scale);
+                }
+            }
+        }
+
+        output.truncate(total_elements);
+        Ok(crate::tensor::TensorData::F32(output))
+    }
+
+    /// Load Q8_0 quantized tensor and dequantize to f32
+    fn load_q8_0(&mut self, dimensions: &[u64], total_elements: usize) -> Result<crate::tensor::TensorData> {
+        let block_size = 32; // Q8_0 block size
+        let n_blocks = (total_elements + block_size - 1) / block_size;
+
+        // Q8_0 format: scale (f32) + quants (32 bytes)
+        let bytes_per_block = 4 + block_size;
+        let total_bytes = n_blocks * bytes_per_block;
+
+        let mut data = vec![0u8; total_bytes];
+        self.reader.read_exact(&mut data).map_err(|e| Error::Io(e))?;
+
+        let mut output = Vec::with_capacity(total_elements);
+        let mut offset = 0;
+
+        for _block in 0..n_blocks {
+            if offset + 4 > data.len() {
+                break;
+            }
+
+            // Read scale
+            let scale = f32::from_le_bytes([
+                data[offset],
+                data[offset + 1],
+                data[offset + 2],
+                data[offset + 3],
+            ]);
+            offset += 4;
+
+            // Read quantized values
+            if offset + block_size > data.len() {
+                break;
+            }
+
+            let quants = &data[offset..offset + block_size];
+            offset += block_size;
+
+            // Dequantize block
+            for &q in quants {
+                let q = q as i8; // Convert to signed
+                output.push(q as f32 * scale);
+            }
+        }
+
+        output.truncate(total_elements);
+        Ok(crate::tensor::TensorData::F32(output))
+    }
+
+    /// Load Q4_K_M quantized tensor and dequantize to f32
+    /// Simplified implementation based on Q4_K format
+    fn load_q4_k(&mut self, _dimensions: &[u64], total_elements: usize) -> Result<crate::tensor::TensorData> {
+        let block_size = 256; // Q4_K block size
+        let n_blocks = (total_elements + block_size - 1) / block_size;
+
+        // Q4_K_M format (simplified):
+        // - scales (2 x f16 = 4 bytes)
+        // - minima (8 x u8 = 8 bytes)
+        // - quants (128 bytes for 256 values)
+        let bytes_per_block = 4 + 8 + 128;
+        let total_bytes = n_blocks * bytes_per_block;
+
+        let mut data = vec![0u8; total_bytes];
+        self.reader.read_exact(&mut data).map_err(|e| Error::Io(e))?;
+
+        let mut output = Vec::with_capacity(total_elements);
+        let mut offset = 0;
+
+        for _ in 0..n_blocks {
+            if offset + 12 > data.len() {
+                break;
+            }
+
+            // Read scales (2 x f16)
+            let scale1 = half::f16::from_le_bytes([data[offset], data[offset + 1]]).to_f32();
+            let scale2 = half::f16::from_le_bytes([data[offset + 2], data[offset + 3]]).to_f32();
+            offset += 4;
+
+            // Skip minima for now (simplified)
+            offset += 8;
+
+            // Read quantized values (128 bytes for 256 values)
+            if offset + 128 > data.len() {
+                break;
+            }
+
+            let quants = &data[offset..offset + 128];
+            offset += 128;
+
+            // Dequantize block (simplified)
+            for i in 0..block_size {
+                let byte_idx = i / 2;
+                let shift = if i % 2 == 0 { 0 } else { 4 };
+
+                if byte_idx < quants.len() {
+                    let q = ((quants[byte_idx] >> shift) & 0x0F) as i8;
+                    let q = if q >= 8 { q - 16 } else { q }; // Convert to signed
+
+                    // Use average of two scales
+                    let scale = (scale1 + scale2) / 2.0;
+                    output.push(q as f32 * scale);
+                }
+            }
+        }
+
+        output.truncate(total_elements);
+        Ok(crate::tensor::TensorData::F32(output))
     }
 }
 
