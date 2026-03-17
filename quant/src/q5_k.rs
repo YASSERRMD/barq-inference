@@ -221,3 +221,81 @@ fn f32_to_f16(f: f32) -> u16 {
     let m = (mantissa >> 13) as u16;
     sign | e | m
 }
+
+pub struct Q5K {
+    block_size: usize,
+}
+
+impl Q5K {
+    pub fn new() -> Self {
+        Self { block_size: QK_K }
+    }
+
+    pub fn quantize(&self, input: &[f32]) -> Result<Vec<u8>> {
+        let n_blocks = input.len() / QK_K;
+        let remainder = input.len() % QK_K;
+
+        let total_blocks = if remainder > 0 {
+            n_blocks + 1
+        } else {
+            n_blocks
+        };
+        let mut output = Vec::with_capacity(total_blocks * BlockQ5K::size_bytes());
+
+        for block_idx in 0..n_blocks {
+            let start = block_idx * QK_K;
+            let block: &[f32; QK_K] = input[start..start + QK_K]
+                .try_into()
+                .map_err(|_| Error::Quantization("Invalid block size".into()))?;
+
+            let qblock = BlockQ5K::quantize(block);
+            output.extend_from_slice(unsafe {
+                std::slice::from_raw_parts(
+                    &qblock as *const BlockQ5K as *const u8,
+                    std::mem::size_of::<BlockQ5K>(),
+                )
+            });
+        }
+
+        if remainder > 0 {
+            let mut last_block = [0.0f32; QK_K];
+            last_block[..remainder].copy_from_slice(&input[n_blocks * QK_K..]);
+            let qblock = BlockQ5K::quantize(&last_block);
+            output.extend_from_slice(unsafe {
+                std::slice::from_raw_parts(
+                    &qblock as *const BlockQ5K as *const u8,
+                    std::mem::size_of::<BlockQ5K>(),
+                )
+            });
+        }
+
+        Ok(output)
+    }
+
+    pub fn dequantize(&self, input: &[u8], output_size: usize) -> Result<Vec<f32>> {
+        let block_bytes = BlockQ5K::size_bytes();
+        let n_blocks = (output_size + QK_K - 1) / QK_K;
+
+        let mut output = vec![0.0f32; n_blocks * QK_K];
+
+        for (block_idx, out_chunk) in output.chunks_mut(QK_K).enumerate().take(n_blocks) {
+            let offset = block_idx * block_bytes;
+            if offset + block_bytes > input.len() {
+                break;
+            }
+
+            let qblock: &BlockQ5K = unsafe { &*(input.as_ptr().add(offset) as *const BlockQ5K) };
+
+            qblock.dequantize(out_chunk);
+        }
+
+        output.truncate(output_size);
+        Ok(output)
+    }
+}
+
+impl Default for Q5K {
+    fn default() -> Self {
+        Self::new()
+    }
+}
