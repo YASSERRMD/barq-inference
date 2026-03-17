@@ -1,6 +1,8 @@
-# Rust
 /target
 **/*.rs.bk
+tmp/
+*.profraw
+*.profdata
 *.pdb
 Cargo.lock
 
@@ -21,22 +23,3 @@ tmp_models/
 
 # Logs
 *.log
-
-# Testing
-.bench/
-test-results/
-
-# Profiling
-flamegraph.svg
-perf.data
-perf.data.old
-
-# Build artifacts
-*.o
-*.a
-*.so
-*.dylib
-*.dll
-
-# Documentation
-docs/book/book/
