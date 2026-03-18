@@ -90,23 +90,65 @@ impl GgufTokenizer {
 
     /// Simple byte-level tokenization
     fn tokenize_bytes(&self, text: &str) -> Vec<u32> {
+        // Fallback or byte tokenization
         let mut tokens = Vec::new();
-
-        // Start with BOS token
-        if let Some(&bos) = self.vocab.special_tokens().bos.as_ref() {
-            tokens.push(bos);
-        }
-
-        // Simple character/byte level encoding
         for byte in text.bytes() {
-            // Map bytes to token IDs (simple approach)
-            let token_id = 2 + (byte as u32); // Offset by special tokens
+            let token_id = 2 + (byte as u32);
             tokens.push(token_id);
         }
+        tokens
+    }
 
-        // End with EOS token
-        if let Some(&eos) = self.vocab.special_tokens().eos.as_ref() {
-            tokens.push(eos);
+    /// Greedy longest-match tokenization for SPM
+    fn tokenize_greedy(&self, text: &str, add_special: bool) -> Vec<u32> {
+        let mut tokens = Vec::new();
+
+        if add_special {
+            // Usually 1 is <s> for LLaMA
+            if let Some(&id) = self.token_to_id.get("<s>") {
+                tokens.push(id);
+            } else {
+                tokens.push(1);
+            }
+        }
+
+        // Replace spaces with standard SPM space block U+2581
+        let spm_text = text.replace(' ', "\u{2581}");
+        let mut check_text = String::new();
+        if !text.starts_with(' ') {
+            check_text.push_str("\u{2581}");
+        }
+        check_text.push_str(&spm_text);
+
+        let mut i = 0;
+        let chars: Vec<char> = check_text.chars().collect();
+
+        while i < chars.len() {
+            let mut match_len = 0;
+            let mut match_id = 0;
+
+            // Try all lengths in reverse to find longest match
+            for len in (1..=chars.len() - i).rev() {
+                let substr: String = chars[i..i + len].iter().collect();
+                if let Some(&id) = self.token_to_id.get(&substr) {
+                    match_len = len;
+                    match_id = id;
+                    break;
+                }
+            }
+
+            if match_len > 0 {
+                tokens.push(match_id);
+                i += match_len;
+            } else {
+                // Unknown character fallback
+                if let Some(&unk) = self.token_to_id.get("<unk>") {
+                    tokens.push(unk);
+                } else {
+                    tokens.push(0);
+                }
+                i += 1;
+            }
         }
 
         tokens
@@ -149,7 +191,13 @@ impl Default for GgufTokenizer {
 #[async_trait::async_trait]
 impl Tokenizer for GgufTokenizer {
     async fn tokenize(&self, text: &str, add_special: bool) -> Result<TokenizationResult> {
-        let ids = self.tokenize_bytes(text);
+        // If we only have dummy token IDs starting from 0, use byte tokenization.
+        // Otherwise use our greedy SPM matching.
+        let ids = if self.token_to_id.len() > 100 {
+            self.tokenize_greedy(text, add_special)
+        } else {
+            self.tokenize_bytes(text)
+        };
 
         let tokens: Vec<String> = ids
             .iter()
