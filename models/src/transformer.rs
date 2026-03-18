@@ -182,7 +182,30 @@ impl LlamaTransformer {
         self.output_proj(&attn_out, layer_idx)
     }
 
-    /// Project to Q, K, or V
+    /// Optimized linear projection using BLAS
+    fn linear_projection_blas(
+        &self,
+        hidden: &[f32],
+        weight_data: &[f32],
+        n_embd: usize,
+        out_dim: usize,
+    ) -> Result<Vec<f32>> {
+        let seq_len = hidden.len() / n_embd;
+
+        // Transpose weight from (out_dim, n_embd) to (n_embd, out_dim)
+        // This allows us to compute: hidden (seq_len, n_embd) * weight^T (n_embd, out_dim)
+        let mut weight_t = vec![0.0f32; out_dim * n_embd];
+        for i in 0..out_dim {
+            for j in 0..n_embd {
+                weight_t[j * out_dim + i] = weight_data[i * n_embd + j];
+            }
+        }
+
+        // Compute output = hidden * weight_t
+        blas::gemm_f32(hidden, &weight_t, seq_len, n_embd, out_dim)
+    }
+
+    /// Project to Q, K, or V (BLAS-optimized)
     fn project_qkv(
         &self,
         hidden: &[f32],
@@ -195,25 +218,14 @@ impl LlamaTransformer {
 
         let weight_data = match weight {
             Some(w) => w.as_f32_slice()?.to_vec(),
-            None => return Ok(vec![0.0; hidden.len() * out_dim / self.n_embd]),
+            None => {
+                let n_embd = self.n_embd;
+                let seq_len = hidden.len() / n_embd;
+                return Ok(vec![0.0; seq_len * out_dim]);
+            }
         };
 
-        let n_embd = self.n_embd;
-        let seq_len = hidden.len() / n_embd;
-        let mut output = vec![0.0; seq_len * out_dim];
-
-        // Matrix multiplication: [seq_len, n_embd] * [out_dim, n_embd]^T
-        for i in 0..seq_len {
-            for j in 0..out_dim {
-                let mut sum = 0.0;
-                for k in 0..n_embd {
-                    sum += hidden[i * n_embd + k] * weight_data[j * n_embd + k];
-                }
-                output[i * out_dim + j] = sum;
-            }
-        }
-
-        Ok(output)
+        self.linear_projection_blas(hidden, &weight_data, self.n_embd, out_dim)
     }
 
     /// Reshape to multi-head format
@@ -357,7 +369,7 @@ impl LlamaTransformer {
         Ok(output)
     }
 
-    /// Output projection
+    /// Output projection (BLAS-optimized)
     fn output_proj(&self, hidden: &[f32], layer_idx: usize) -> Result<Vec<f32>> {
         let weight_name = format!("blk.{}.attn_output.weight", layer_idx);
         let weight = self.model.get_tensor_blocking(&weight_name);
@@ -367,22 +379,7 @@ impl LlamaTransformer {
             None => return Ok(hidden.to_vec()),
         };
 
-        let n_embd = self.n_embd;
-        let seq_len = hidden.len() / n_embd;
-        let mut output = vec![0.0; hidden.len()];
-
-        // Simplified matrix multiplication
-        for i in 0..seq_len {
-            for j in 0..n_embd {
-                let mut sum = 0.0;
-                for k in 0..n_embd {
-                    sum += hidden[i * n_embd + k] * weight_data[j * n_embd + k];
-                }
-                output[i * n_embd + j] = sum;
-            }
-        }
-
-        Ok(output)
+        self.linear_projection_blas(hidden, &weight_data, self.n_embd, self.n_embd)
     }
 
     /// SwiGLU feed-forward network
@@ -407,7 +404,7 @@ impl LlamaTransformer {
         self._ffn_projection(&gated, layer_idx, "down", n_embd)
     }
 
-    /// FFN projection
+    /// FFN projection (BLAS-optimized)
     fn _ffn_projection(
         &self,
         hidden: &[f32],
@@ -423,22 +420,7 @@ impl LlamaTransformer {
             None => return Ok(vec![0.0; hidden.len() * out_dim / self.n_embd]),
         };
 
-        let n_embd = self.n_embd;
-        let seq_len = hidden.len() / n_embd;
-        let mut output = vec![0.0; seq_len * out_dim];
-
-        // Matrix multiplication: [seq_len, n_embd] * [out_dim, n_embd]^T
-        for i in 0..seq_len {
-            for j in 0..out_dim {
-                let mut sum = 0.0;
-                for k in 0..n_embd {
-                    sum += hidden[i * n_embd + k] * weight_data[j * n_embd + k];
-                }
-                output[i * out_dim + j] = sum;
-            }
-        }
-
-        Ok(output)
+        self.linear_projection_blas(hidden, &weight_data, self.n_embd, out_dim)
     }
 
     /// Residual connection
