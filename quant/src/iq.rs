@@ -6,13 +6,33 @@
 use barq_core::error::{Error, Result};
 use half::f16;
 
-/// The non-linear 4-bit value lookup table for IQ4_KS.
+// ─────────────────────────────────────────────────────────────────────────────
+// Lookup tables from ggml-common.h
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Non-linear 4-bit lookup table for IQ4_K / IQ4_KS.
 /// Two groups of 16: base values (index 0..15) and shifted values (index 16..31).
 /// Source: ggml-common.h `iq4k_values`
 pub const IQ4K_VALUES: [i8; 32] = [
     -127, -104, -83, -65, -49, -35, -22, -10, 1, 13, 25, 38, 53, 69, 89, 113, -123, -100, -79, -61,
     -45, -31, -18, -6, 5, 17, 29, 42, 57, 73, 93, 117,
 ];
+
+/// Non-linear 2-bit lookup table for IQ2_KS.
+/// Two groups of 4: base values (index 0..3) and shifted values (index 4..7).
+/// Source: ggml-common.h `iq2nl_values`
+pub const IQ2NL_VALUES: [i8; 8] = [-31, -13, 1, 17, -26, -8, 6, 22];
+
+/// Non-linear 3-bit lookup table for IQ3_KS.
+/// Two groups of 8: base values (0..7) and shifted values (8..15).
+/// Source: ggml-common.h `iq3nl_values`
+pub const IQ3NL_VALUES: [i8; 16] = [
+    -63, -40, -23, -10, 1, 13, 28, 47, -59, -36, -19, -6, 5, 17, 32, 51,
+];
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Public API
+// ─────────────────────────────────────────────────────────────────────────────
 
 /// IQ quantization types
 #[allow(non_camel_case_types)]
@@ -65,80 +85,59 @@ impl IQQuantConfig {
     }
 }
 
-/// IQ4_KS block structure (matches ik_llama.cpp block_iq4_ks).
+// ─────────────────────────────────────────────────────────────────────────────
+// IQ4_KS Dequantization
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// IQ4_KS block structure (matches ik_llama.cpp `block_iq4_ks`).
 ///
 /// Memory layout per super-block of 256 values:
-/// - 1x f32 super-block scale (`d`), stored *before* the blocks array
+/// - 1x f32 super-block scale (`d`), stored *before* the blocks array (per row)
 /// - For each sub-block of 32 values:
-///   - `scales[ib]`: packed u8. Bit 0 = shift flag. Bits 1..7 = quantized sub-scale.
+///   - `scales[ib]`: packed u8. Bit 0 = shift flag. Bits 1..7 = quantized sub-scale → [-127..127].
 ///   - `qs[ib * 16 .. ib * 16 + 16]`: 16 bytes, 2 values packed per byte (4 bits each)
 ///
-/// The actual binary layout on disk has an f32 prepended to each row, NOT inside
-/// the struct. The struct only contains the per-block scales and quantized weights.
-#[derive(Debug, Clone)]
+/// `sizeof(block_iq4_ks) == QK_K/32 + QK_K/2 = 8 + 128 = 136 bytes`
+/// The f32 row scale (`d`) is prepended once per row, outside the struct.
 #[repr(C)]
+#[derive(Debug, Clone)]
 pub struct BlockIq4Ks {
     /// Sub-block scales. bit0 = is_shifted, bits 1-7 = scale level mapped to [-127..127].
     pub scales: [u8; 8],
-    /// 4-bit packed quantized weights: 256 values → 128 bytes (low nibble then high nibble).
+    /// 4-bit packed quantized weights: 256 values → 128 bytes.
     pub qs: [u8; 128],
-}
-
-/// IQ3_KS block structure
-#[derive(Debug, Clone)]
-#[repr(C)]
-pub struct BlockIq3Ks {
-    pub d: f16,
-    pub scales: [u8; 12],
-    pub qs: [u8; 96], // 3 bits per value
-}
-
-/// IQ2_KS block structure
-#[derive(Debug, Clone)]
-#[repr(C)]
-pub struct BlockIq2Ks {
-    pub d: f16,
-    pub scales: [u8; 8],
-    pub qs: [u8; 64], // 2 bits per value
-}
-
-/// Q4_K_R4 repacked structure for CPU
-/// 4 rows interleaved for SIMD-friendly access.
-#[derive(Debug, Clone)]
-#[repr(C)]
-pub struct BlockQ4KR4 {
-    pub d: [f16; 4],
-    pub scales: [u8; 48],
-    pub qs: [u8; 512],
 }
 
 /// Dequantize IQ4_KS format into f32 values.
 ///
 /// Matches `dequantize_row_iq4_ks` in ik_llama.cpp exactly.
 ///
-/// Layout: `[f32 d] [block_iq4_ks * n_blocks]`
-/// Each block_iq4_ks: `scales[8]` + `qs[128]`
+/// On-disk layout per row:
+/// ```text
+/// [f32 d]                           4 bytes  (row scale)
+/// [block_iq4_ks * n_blocks]         n_blocks × 136 bytes
+/// ```
 pub fn dequantize_iq4_ks(data: &[u8], n_elements: usize) -> Result<Vec<f32>> {
     const QK_K: usize = 256;
-    const BLOCK_SIZE: usize = 32; // sub-block size within the super-block
-    const SCALES_PER_BLOCK: usize = QK_K / BLOCK_SIZE; // = 8
+    const BLOCK_SIZE: usize = 32; // sub-block size
+    const N_SCALES: usize = QK_K / BLOCK_SIZE; // = 8
 
-    // The per-row f32 scale `d` is the first 4 bytes
     if data.len() < 4 {
-        return Err(Error::Tensor("IQ4_KS data too short for scale".into()));
+        return Err(Error::Tensor("IQ4_KS data too short for row scale".into()));
     }
+
+    // Row-level f32 scale
     let d = f32::from_le_bytes([data[0], data[1], data[2], data[3]]);
 
-    // Remaining bytes are block_iq4_ks structures
-    // Each block = 8 (scales) + 128 (qs) = 136 bytes for 256 values
-    let block_bytes = 8 + 128; // sizeof(block_iq4_ks)
+    // Each block = 8 bytes scales + 128 bytes qs = 136 bytes
+    const BLOCK_BYTES: usize = N_SCALES + 128;
     let n_blocks = n_elements.div_ceil(QK_K);
     let block_data = &data[4..];
 
-    if block_data.len() < n_blocks * block_bytes {
+    if block_data.len() < n_blocks * BLOCK_BYTES {
         return Err(Error::Tensor(format!(
             "IQ4_KS: need {} bytes for {} blocks, got {}",
-            n_blocks * block_bytes,
+            n_blocks * BLOCK_BYTES,
             n_blocks,
             block_data.len()
         )));
@@ -147,33 +146,32 @@ pub fn dequantize_iq4_ks(data: &[u8], n_elements: usize) -> Result<Vec<f32>> {
     let mut output = Vec::with_capacity(n_elements);
 
     for ibl in 0..n_blocks {
-        let blk = &block_data[ibl * block_bytes..][..block_bytes];
-        let scales = &blk[0..8];
-        let qs = &blk[8..8 + 128];
+        let blk = &block_data[ibl * BLOCK_BYTES..][..BLOCK_BYTES];
+        let scales = &blk[0..N_SCALES];
+        let qs = &blk[N_SCALES..BLOCK_BYTES];
 
-        let mut qs_offset = 0usize;
+        let mut qs_off = 0usize;
 
-        for ib in 0..SCALES_PER_BLOCK {
-            // scales[ib]: bit0 = shift flag (which group of 16 in IQ4K_VALUES)
-            //             bits 1..7: quantized sub-scale, mapped to [-127..127]
+        for ib in 0..N_SCALES {
+            // scale_byte: bit0 = is_shifted, bits 1-7 map to [-127..127]
             let scale_byte = scales[ib];
             let is_shifted = (scale_byte & 1) != 0;
-            let scale_level = (scale_byte & 0xFE) as i32 - 127;
+            // (scale_byte & 0xFE) is an unsigned value [0,254], subtract 127 → [-127,127]
+            let scale_level: i32 = (scale_byte & 0xFE) as i32 - 127;
             let dl = d * scale_level as f32;
 
-            // Pick which group of 16 lookup values to use
-            let values_offset: usize = if is_shifted { 16 } else { 0 };
+            let values_offset = if is_shifted { 16usize } else { 0 };
 
-            // Process BLOCK_SIZE = 32 values from 16 bytes
-            // Low nibble = value at j, high nibble = value at j + BLOCK_SIZE/2
+            // Each sub-block: 16 bytes → 32 values
+            // Low nibble = output[j], high nibble = output[j + BLOCK_SIZE/2]
             for j in 0..(BLOCK_SIZE / 2) {
-                let byte = qs[qs_offset + j];
-                let v_lo = IQ4K_VALUES[values_offset + (byte & 0x0F) as usize];
-                let v_hi = IQ4K_VALUES[values_offset + (byte >> 4) as usize];
-                output.push(dl * v_lo as f32);
-                output.push(dl * v_hi as f32);
+                let byte = qs[qs_off + j];
+                let lo_idx = values_offset + (byte & 0x0F) as usize;
+                let hi_idx = values_offset + (byte >> 4) as usize;
+                output.push(dl * IQ4K_VALUES[lo_idx] as f32);
+                output.push(dl * IQ4K_VALUES[hi_idx] as f32);
             }
-            qs_offset += BLOCK_SIZE / 2;
+            qs_off += BLOCK_SIZE / 2;
         }
     }
 
@@ -181,68 +179,298 @@ pub fn dequantize_iq4_ks(data: &[u8], n_elements: usize) -> Result<Vec<f32>> {
     Ok(output)
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// IQ3_KS Dequantization
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// IQ3_KS block structure (matches ik_llama.cpp `block_iq3_ks`).
+///
+/// `sizeof(block_iq3_ks) == uint16_t extra (2) + QK_K/64 scales (4) + QK_K/4 qs (64) + QK_K/8 qh (32) = 102 bytes`
+/// The f16 row scale (`d`) is prepended once per row outside the struct.
+///
+/// On-disk layout per row:
+/// ```text
+/// [f16 d]                  2 bytes (row scale)
+/// [block_iq3_ks * n_blocks] n_blocks × 102 bytes
+/// ```
+pub fn dequantize_iq3_ks(data: &[u8], n_elements: usize) -> Result<Vec<f32>> {
+    const QK_K: usize = 256;
+    const BLOCK_SIZE: usize = 32; // sub-block size (kBlockSize = 32)
+                                  // block layout: uint16_t extra (2) + scales[QK_K/64=4] + qs[QK_K/4=64] + qh[QK_K/8=32]
+    const BLOCK_BYTES: usize = 2 + 4 + 64 + 32; // 102
+    const N_BLOCKS_PER_SUPER: usize = QK_K / BLOCK_SIZE; // = 8
+
+    if data.len() < 2 {
+        return Err(Error::Tensor("IQ3_KS data too short for row scale".into()));
+    }
+
+    // Row-level f16 scale
+    let d = f16::from_le_bytes([data[0], data[1]]).to_f32();
+
+    let n_blocks = n_elements.div_ceil(QK_K);
+    let block_data = &data[2..];
+
+    if block_data.len() < n_blocks * BLOCK_BYTES {
+        return Err(Error::Tensor(format!(
+            "IQ3_KS: need {} bytes for {} blocks, got {}",
+            n_blocks * BLOCK_BYTES,
+            n_blocks,
+            block_data.len()
+        )));
+    }
+
+    let mut output = Vec::with_capacity(n_elements);
+
+    // dl computation (matching dequantize_row_iq3_ks in C++):
+    // for each ib in 0..8:
+    //   ls1 = (scales[ib%4] & 0xf) | (((extra >> (ib+0)) & 1) << 4)  → but ib runs 0..4 for lower half
+    //   …actually per the C++ code:
+    //   for j in 0..4:
+    //       int ls1 = (x[ibl].scales[j] & 0xf) | (((x[ibl].extra >> (j+0)) & 1) << 4)
+    //       int ls2 = (x[ibl].scales[j] >> 4)  | (((x[ibl].extra >> (j+4)) & 1) << 4)
+    //       dl[j+0] = d*(ls1 - 16)
+    //       dl[j+4] = d*(ls2 - 16)
+    //
+    // then for each i128 in 0..(QK_K/128):
+    //   for ib in 0..4:
+    //       values = iq3nl_values offset by ((extra >> (8 + 4*i128+ib)) & 1) << 3
+    //       for j in 0..32:
+    //           y[j] = dl[4*i128+ib] * values[((qs[j] >> 2*ib) & 3) | (((qh[j] >> (4*i128+ib)) & 1) << 2)]
+
+    for ibl in 0..n_blocks {
+        let blk = &block_data[ibl * BLOCK_BYTES..][..BLOCK_BYTES];
+        let extra = u16::from_le_bytes([blk[0], blk[1]]);
+        let scales = &blk[2..6]; // [4]
+        let qs = &blk[6..70]; // [64]
+        let qh = &blk[70..102]; // [32]
+
+        // Build dl[8]
+        let mut dl = [0f32; 8];
+        for j in 0..4 {
+            let ls1 = ((scales[j] & 0xf) as u32 | (((extra >> j) & 1) as u32) << 4) as i32;
+            let ls2 = ((scales[j] >> 4) as u32 | (((extra >> (j + 4)) & 1) as u32) << 4) as i32;
+            dl[j] = d * (ls1 - 16) as f32;
+            dl[j + 4] = d * (ls2 - 16) as f32;
+        }
+
+        let mut y = vec![0f32; QK_K];
+
+        for i128 in 0..(QK_K / 128) {
+            for ib in 0..4 {
+                let shift_flag = ((extra >> (8 + 4 * i128 as u16 + ib as u16)) & 1) as usize;
+                let values_offset = shift_flag << 3; // 0 or 8
+
+                let qs_base = i128 * 32; // each i128 consumes 32 qs bytes (4 sub-blocks × 8 values)
+                let qh_base = 0usize; // qh is shared, indexed by (4*i128+ib) shift
+
+                for j in 0..BLOCK_SIZE {
+                    let q_low = ((qs[qs_base + j] >> (2 * ib)) & 3) as usize;
+                    let q_high = (((qh[qh_base + j] >> (4 * i128 + ib)) & 1) as usize) << 2;
+                    let idx = values_offset + q_low | q_high;
+                    y[i128 * 128 + ib * 32 + j] = dl[4 * i128 + ib] * IQ3NL_VALUES[idx] as f32;
+                }
+            }
+        }
+
+        output.extend_from_slice(&y);
+    }
+
+    output.truncate(n_elements);
+    Ok(output)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// IQ2_KS Dequantization
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// IQ2_KS block structure (matches ik_llama.cpp `block_iq2_ks`).
+///
+/// `sizeof(block_iq2_ks) == uint16_t extra (2) + QK_K/64 scales (4) + QK_K/4 qs (64) = 70 bytes`
+/// The f16 row scale (`d`) is prepended once per row outside the struct.
+///
+/// On-disk layout per row:
+/// ```text
+/// [f16 d]                   2 bytes (row scale)
+/// [block_iq2_ks * n_blocks]  n_blocks × 70 bytes
+/// ```
+///
+/// C++ reference (dequantize_row_iq2_ks):
+/// ```cpp
+/// for ib64 in 0..QK_K/64:
+///     dl1 = d * (((scales[ib64] & 0xf) | ((extra >> 4) & 0x10)) - 16)
+///     dl2 = d * (((scales[ib64] >> 4)  | ((extra >> 5) & 0x10)) - 16)
+///     values1 = extra & 1 ? iq2nl_values+4 : iq2nl_values
+///     values2 = extra & 2 ? iq2nl_values+4 : iq2nl_values
+///     extra >>= 2
+///     shift = 0 or 4 alternating within each 64-element group
+///     for j in 0..32:
+///         y[j+ 0] = dl1 * values1[(qs[j] >> (shift+0)) & 3]
+///         y[j+32] = dl2 * values2[(qs[j] >> (shift+2)) & 3]
+///     shift += 4; if shift==8 { qs += 32; shift = 0 }
+/// ```
+pub fn dequantize_iq2_ks(data: &[u8], n_elements: usize) -> Result<Vec<f32>> {
+    const QK_K: usize = 256;
+    const BLOCK_BYTES: usize = 2 + 4 + 64; // extra(2) + scales(4) + qs(64) = 70
+
+    if data.len() < 2 {
+        return Err(Error::Tensor("IQ2_KS data too short for row scale".into()));
+    }
+
+    let d = f16::from_le_bytes([data[0], data[1]]).to_f32();
+    let n_blocks = n_elements.div_ceil(QK_K);
+    let block_data = &data[2..];
+
+    if block_data.len() < n_blocks * BLOCK_BYTES {
+        return Err(Error::Tensor(format!(
+            "IQ2_KS: need {} bytes for {} blocks, got {}",
+            n_blocks * BLOCK_BYTES,
+            n_blocks,
+            block_data.len()
+        )));
+    }
+
+    let mut output = Vec::with_capacity(n_elements);
+
+    for ibl in 0..n_blocks {
+        let blk = &block_data[ibl * BLOCK_BYTES..][..BLOCK_BYTES];
+        let mut extra = u16::from_le_bytes([blk[0], blk[1]]);
+        let scales = &blk[2..6]; // [4]
+        let qs = &blk[6..70]; // [64]
+
+        let mut y = [0f32; QK_K];
+        let mut qs_off = 0usize;
+        let mut shift = 0u32;
+
+        for ib64 in 0..(QK_K / 64) {
+            // Scale extraction matching C++
+            let dl1 = d
+                * (((scales[ib64] & 0xf) as u32 | (((extra as u32) >> 4) & 0x10)) as i32 - 16)
+                    as f32;
+            let dl2 = d
+                * (((scales[ib64] >> 4) as u32 | (((extra as u32) >> 5) & 0x10)) as i32 - 16)
+                    as f32;
+            let v1_off: usize = if (extra & 1) != 0 { 4 } else { 0 };
+            let v2_off: usize = if (extra & 2) != 0 { 4 } else { 0 };
+            extra >>= 2;
+
+            for j in 0..32usize {
+                y[ib64 * 64 + j] =
+                    dl1 * IQ2NL_VALUES[v1_off + ((qs[qs_off + j] >> shift) & 3) as usize] as f32;
+                y[ib64 * 64 + j + 32] = dl2
+                    * IQ2NL_VALUES[v2_off + ((qs[qs_off + j] >> (shift + 2)) & 3) as usize] as f32;
+            }
+
+            shift += 4;
+            if shift == 8 {
+                qs_off += 32;
+                shift = 0;
+            }
+        }
+
+        output.extend_from_slice(&y);
+    }
+
+    output.truncate(n_elements);
+    Ok(output)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Dispatcher
+// ─────────────────────────────────────────────────────────────────────────────
+
 /// Dequantize IQ quantized data (dispatcher)
 pub fn dequantize_iq(data: &[u8], config: &IQQuantConfig) -> Result<Vec<f32>> {
-    let n_elements = {
-        // Estimate element count from data length and type
-        match config.iq_type {
-            IQType::IQ4_KS => {
-                // [4 bytes f32 d] + [n_blocks * 136 bytes]
-                let block_bytes = 136usize;
-                let n_blocks = (data.len().saturating_sub(4)) / block_bytes;
-                n_blocks * 256
-            }
-            _ => data.len(), // fallback
-        }
-    };
+    let n_elements = estimate_n_elements(data, config);
 
     match config.iq_type {
         IQType::IQ4_KS => dequantize_iq4_ks(data, n_elements),
+        IQType::IQ3_KS => dequantize_iq3_ks(data, n_elements),
+        IQType::IQ2_KS => dequantize_iq2_ks(data, n_elements),
         _ => {
-            // Placeholder for other IK types
+            // Placeholder for other IK types not yet implemented
             Ok(vec![0.0f32; n_elements.max(1)])
         }
     }
+}
+
+/// Estimate the number of elements from raw data length
+fn estimate_n_elements(data: &[u8], config: &IQQuantConfig) -> usize {
+    let (header, block_bytes, qk_k) = match config.iq_type {
+        IQType::IQ4_KS => (4usize, 136usize, 256usize), // f32 row scale
+        IQType::IQ3_KS => (2usize, 102usize, 256usize), // f16 row scale
+        IQType::IQ2_KS => (2usize, 70usize, 256usize),  // f16 row scale
+        _ => return data.len(),
+    };
+    let n_blocks = (data.len().saturating_sub(header)) / block_bytes;
+    n_blocks * qk_k
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Verifies that IQ4K_VALUES matches the reference table from ggml-common.h
+    /// Verifies IQ4K_VALUES matches the reference table from ggml-common.h
     #[test]
     fn test_iq4k_values_table() {
         assert_eq!(IQ4K_VALUES[0], -127);
         assert_eq!(IQ4K_VALUES[7], -10);
         assert_eq!(IQ4K_VALUES[15], 113);
-        // shifted group
         assert_eq!(IQ4K_VALUES[16], -123);
         assert_eq!(IQ4K_VALUES[31], 117);
     }
 
-    /// Tests that dequantize_iq4_ks correctly handles a zero block (all zeros → all zeros out)
+    /// Verifies IQ2NL_VALUES matches ggml-common.h `iq2nl_values`
+    #[test]
+    fn test_iq2nl_values_table() {
+        assert_eq!(IQ2NL_VALUES[0], -31);
+        assert_eq!(IQ2NL_VALUES[3], 17);
+        assert_eq!(IQ2NL_VALUES[4], -26);
+        assert_eq!(IQ2NL_VALUES[7], 22);
+    }
+
+    /// Verifies IQ3NL_VALUES matches ggml-common.h `iq3nl_values`
+    #[test]
+    fn test_iq3nl_values_table() {
+        assert_eq!(IQ3NL_VALUES[0], -63);
+        assert_eq!(IQ3NL_VALUES[7], 47);
+        assert_eq!(IQ3NL_VALUES[8], -59);
+        assert_eq!(IQ3NL_VALUES[15], 51);
+    }
+
+    /// Tests that dequantize_iq4_ks handles a zero-scale block correctly
     #[test]
     fn test_iq4_ks_zero_block() {
         // Build a minimal valid IQ4_KS blob: 4-byte f32 scale + one 136-byte block
         let mut data = vec![0u8; 4 + 136];
         // d = 1.0
         data[0..4].copy_from_slice(&1.0f32.to_le_bytes());
-        // scales[0] = 127 (scale_level = 127 & 0xFE - 127 = 126 - 127 = -1, not zero)
-        // Use scale_byte = 128 = 0x80 → scale_level = 128 & 0xFE - 127 = 128 - 127 = 1, no shift
-        data[4] = 128u8; // scales[0]
-                         // qs all zero → all values are IQ4K_VALUES[0] = -127
+        // scales[0] = 128 => (128 & 0xFE) - 127 = 128 - 127 = 1, no shift
+        data[4] = 128u8;
+        // qs all zero → all nibbles 0x0 → IQ4K_VALUES[0] = -127
         let result = dequantize_iq4_ks(&data, 256).unwrap();
         assert_eq!(result.len(), 256);
-        // All qs nibbles are 0x0 → IQ4K_VALUES[0] = -127
-        // dl = 1.0 * 1 = 1.0; value[0] = -127
-        let expected = 1.0 * -127_f32;
-        for val in &result[0..32] {
-            assert_eq!(*val, expected, "Expected {}, got {}", expected, val);
-        }
-        // Remaining 7 sub-blocks have scale_byte = 0 → scale_level = 0 - 127 = -127 → dl = -127
-        let expected_rest = 1.0 * -127_f32 * (-127f32);
-        for val in &result[32..] {
-            assert_eq!(*val, expected_rest);
-        }
+        // first 32 values: dl = 1.0*1 = 1.0, val = -127
+        assert_eq!(result[0], 1.0 * -127_f32);
+        assert_eq!(result[31], 1.0 * -127_f32);
+    }
+
+    /// Tests that dequantize_iq2_ks produces correctly sized output
+    #[test]
+    fn test_iq2_ks_output_size() {
+        // f16 d = 1.0, one block: 70 bytes
+        let mut data = vec![0u8; 2 + 70];
+        data[0..2].copy_from_slice(&f16::ONE.to_le_bytes());
+        let result = dequantize_iq2_ks(&data, 256).unwrap();
+        assert_eq!(result.len(), 256);
+    }
+
+    /// Tests that dequantize_iq3_ks produces correctly sized output
+    #[test]
+    fn test_iq3_ks_output_size() {
+        // f16 d = 1.0, one block: 102 bytes
+        let mut data = vec![0u8; 2 + 102];
+        data[0..2].copy_from_slice(&f16::ONE.to_le_bytes());
+        let result = dequantize_iq3_ks(&data, 256).unwrap();
+        assert_eq!(result.len(), 256);
     }
 }

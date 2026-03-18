@@ -130,6 +130,10 @@ pub enum GgufTensorType {
     Q5_K = 13,
     Q6_K = 14,
     Q8_K = 15,
+    IQ2_KS = 18,
+    IQ3_KS = 19,
+    IQ4_KS = 16,
+    Q4_K_R4 = 30000, // Custom type ID for Q4_K_R4 if not in standard GGUF
 }
 
 impl GgufTensorType {
@@ -150,6 +154,10 @@ impl GgufTensorType {
             13 => Ok(GgufTensorType::Q5_K),
             14 => Ok(GgufTensorType::Q6_K),
             15 => Ok(GgufTensorType::Q8_K),
+            16 => Ok(GgufTensorType::IQ4_KS),
+            18 => Ok(GgufTensorType::IQ2_KS),
+            19 => Ok(GgufTensorType::IQ3_KS),
+            30000 => Ok(GgufTensorType::Q4_K_R4),
             _ => Err(Error::InvalidGguf(format!(
                 "Unknown GGUF tensor type: {}",
                 value
@@ -168,7 +176,11 @@ impl GgufTensorType {
             | GgufTensorType::Q4_K
             | GgufTensorType::Q5_K
             | GgufTensorType::Q6_K
-            | GgufTensorType::Q8_K => 256,
+            | GgufTensorType::Q8_K
+            | GgufTensorType::IQ4_KS
+            | GgufTensorType::IQ3_KS
+            | GgufTensorType::IQ2_KS => 256,
+            GgufTensorType::Q4_K_R4 => 32,
             GgufTensorType::F32 | GgufTensorType::F16 => 1,
         }
     }
@@ -190,6 +202,10 @@ impl GgufTensorType {
             GgufTensorType::Q5_K => "q5_k",
             GgufTensorType::Q6_K => "q6_k",
             GgufTensorType::Q8_K => "q8_k",
+            GgufTensorType::IQ4_KS => "iq4_ks",
+            GgufTensorType::IQ3_KS => "iq3_ks",
+            GgufTensorType::IQ2_KS => "iq2_ks",
+            GgufTensorType::Q4_K_R4 => "q4_k_r4",
         }
     }
 }
@@ -453,6 +469,37 @@ impl GgufReader {
             GgufTensorType::Q8_0 => self.load_q8_0(&dimensions, total_elements)?,
             GgufTensorType::Q4_K => self.load_q4_k(&dimensions, total_elements)?,
             GgufTensorType::Q6_K => self.load_q6_k(&dimensions, total_elements)?,
+            GgufTensorType::IQ4_KS
+            | GgufTensorType::IQ3_KS
+            | GgufTensorType::IQ2_KS
+            | GgufTensorType::Q4_K_R4 => {
+                // Correct on-disk sizes from ggml-common.h:
+                //   IQ4_KS: 4 byte f32 row-scale + n_blocks*(8 scales + 128 qs) = 4 + n_blocks*136
+                //   IQ3_KS: 2 byte f16 row-scale + n_blocks*(2 extra + 4 scales + 64 qs + 32 qh) = 2 + n_blocks*102
+                //   IQ2_KS: 2 byte f16 row-scale + n_blocks*(2 extra + 4 scales + 64 qs) = 2 + n_blocks*70
+                //   Q4_K_R4: 8 byte 4xf16 row-scales + n_blocks*(32 scales + 512 qs) = 8 + n_blocks*544
+                let (row_header, bytes_per_block) = match gguf_type {
+                    GgufTensorType::IQ4_KS => (4usize, 136usize),
+                    GgufTensorType::IQ3_KS => (2usize, 102usize),
+                    GgufTensorType::IQ2_KS => (2usize, 70usize),
+                    GgufTensorType::Q4_K_R4 => (8usize, 544usize),
+                    _ => unreachable!(),
+                };
+                let n_blocks = total_elements.div_ceil(gguf_type.block_size());
+                let total_bytes = row_header + n_blocks * bytes_per_block;
+                let mut raw = vec![0u8; total_bytes];
+                self.reader.read_exact(&mut raw).map_err(Error::Io)?;
+
+                // barq_core cannot depend on the `quant` crate — dequantization for these
+                // types is handled at a higher level (in models/barq-inference) via
+                // quant::iq::{dequantize_iq4_ks, dequantize_iq3_ks, dequantize_iq2_ks}.
+                return Err(Error::Unsupported(format!(
+                    "IK quant {} tensor '{}' cannot be dequantized in GgufReader; \
+                     use quant::iq::dequantize_* at a higher level",
+                    gguf_type.name(),
+                    name
+                )));
+            }
             _ => {
                 return Err(Error::Unsupported(format!(
                     "Loading GGUF tensor type: {} (tensor: {})",

@@ -221,7 +221,7 @@ impl KVCache {
         for h in 0..self.n_head_kv {
             let start = h * n_tokens * head_dim;
             let end = (h + 1) * n_tokens * head_dim;
-            
+
             self.k_cache[layer][h].extend_from_slice(&k[start..end]);
             self.v_cache[layer][h].extend_from_slice(&v[start..end]);
         }
@@ -316,14 +316,14 @@ impl ModelContext {
         let mut cache = self.kv_cache.lock().await;
         // Ensure cache starts empty for new encode
         cache.clear();
-        
+
         let mut pos = self.pos.lock().await;
         *pos = 0;
-        
+
         let logits = self.transformer.forward(&batch.token, &mut cache, *pos)?;
 
         *pos += batch.n_tokens as usize;
-        
+
         Ok(logits)
     }
 
