@@ -32,6 +32,7 @@
 //! Qwen, GPT-2, BERT, and many more.
 
 pub mod arch;
+pub mod arch_registry;
 pub mod context;
 pub mod deepseek;
 pub mod ffn;
@@ -45,6 +46,7 @@ pub mod qwen2;
 pub mod transformer;
 
 pub use arch::{LlmArch, LlmType};
+pub use arch_registry::{ArchitectureRegistry, LlmArchTrait};
 pub use context::ModelContext;
 pub use deepseek::{DeepSeekMoEModel, DeepSeekModel};
 pub use kv_cache::{AdvancedKVCache, KVCacheStats};
