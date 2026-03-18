@@ -291,4 +291,30 @@ mod tests {
         // Cache should not exceed max_pages after eviction
         assert!(cache.cached_pages().await <= 5);
     }
+
+    #[tokio::test]
+    async fn test_split_edge() {
+        let cache = PromptCache::new(100);
+        // Shared prefix: [1, 2, 3]
+        cache
+            .insert(&[1, 2, 3, 4, 5], &[10, 11, 12, 13, 14])
+            .await
+            .unwrap();
+        cache
+            .insert(&[1, 2, 3, 6, 7], &[10, 11, 12, 15, 16])
+            .await
+            .unwrap();
+
+        let res1 = cache.match_prefix(&[1, 2, 3, 4, 5]).await;
+        assert_eq!(res1.matched_tokens, 5);
+        assert_eq!(res1.pages, vec![10, 11, 12, 13, 14]);
+
+        let res2 = cache.match_prefix(&[1, 2, 3, 6, 7]).await;
+        assert_eq!(res2.matched_tokens, 5);
+        assert_eq!(res2.pages, vec![10, 11, 12, 15, 16]);
+
+        let res3 = cache.match_prefix(&[1, 2, 3, 8]).await;
+        assert_eq!(res3.matched_tokens, 3);
+        assert_eq!(res3.pages, vec![10, 11, 12]);
+    }
 }

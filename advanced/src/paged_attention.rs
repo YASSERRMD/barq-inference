@@ -229,4 +229,30 @@ mod tests {
         cache.free(0).await.unwrap();
         assert_eq!(cache.free_page_count().await, 1024);
     }
+
+    #[tokio::test]
+    async fn test_defrag() {
+        let cache = PagedAttention::new(10, 16);
+
+        // Allocate some pages for two sequences
+        let _s0_pages = cache.allocate(0, 3).await.unwrap(); // typically 7, 8, 9 (LIFO pop)
+        let _s1_pages = cache.allocate(1, 3).await.unwrap(); // typically 4, 5, 6
+
+        // Free the first sequence to create a hole
+        cache.free(0).await.unwrap();
+
+        // Defrag should move s1_pages to lower slots
+        let moved = cache.defrag().await.unwrap();
+        assert!(moved > 0);
+
+        // Verify s1 still has 3 pages
+        let s1_new = cache.sequence_pages.lock().await.get(&1).cloned().unwrap();
+        assert_eq!(s1_new.len(), 3);
+
+        // Ensure they are moved to lowest possible slots (0, 1, 2)
+        assert_eq!(s1_new, vec![0, 1, 2]);
+
+        // Verify free pages count is correct (10 - 3 = 7)
+        assert_eq!(cache.free_page_count().await, 7);
+    }
 }
