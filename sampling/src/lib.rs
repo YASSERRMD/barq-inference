@@ -39,6 +39,8 @@
 //! - XTC (eXtending The Context) sampling
 
 pub mod chain;
+pub mod grammar_sampler;
+pub mod json_mode;
 pub mod min_p;
 pub mod mirostat;
 pub mod penalties;
@@ -50,6 +52,8 @@ pub mod typical;
 pub mod xtc;
 
 pub use chain::SamplerChain;
+pub use grammar_sampler::{GrammarSampler, GrammarSamplerBuilder};
+pub use json_mode::{JsonMode, JsonSchema};
 pub use min_p::MinP;
 pub use mirostat::{Mirostat, MirostatType};
 pub use penalties::{FrequencyPenalty, PresencePenalty, RepetitionPenalty};

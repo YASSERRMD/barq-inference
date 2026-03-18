@@ -40,6 +40,7 @@ pub mod context;
 pub mod error;
 pub mod gemm;
 pub mod gguf;
+pub mod grammar;
 pub mod memory;
 pub mod normalization;
 pub mod ops;
