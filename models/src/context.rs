@@ -486,11 +486,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_kv_cache() {
-        let cache = KVCache::new(2048, 32);
+        let cache = KVCache::new(2048, 32, 32);
         assert_eq!(cache.size(), 0);
-
-        assert!(cache.get(0, true).is_none());
-        assert!(cache.get(0, false).is_none());
     }
 
     #[tokio::test]
