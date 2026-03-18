@@ -138,7 +138,11 @@ impl BlockQ3K {
             }
         }
 
-        let d = f32_to_f16(if all_max_abs > 0.0 { all_max_abs / 31.0 } else { 0.0 });
+        let d = f32_to_f16(if all_max_abs > 0.0 {
+            all_max_abs / 31.0
+        } else {
+            0.0
+        });
 
         BlockQ3K {
             hmask,

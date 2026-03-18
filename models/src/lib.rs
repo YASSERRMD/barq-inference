@@ -39,10 +39,14 @@ pub mod llama;
 pub mod loader;
 pub mod mistral;
 pub mod mixtral;
+pub mod qwen;
+pub mod qwen2;
 pub mod transformer;
 
 pub use arch::{LlmArch, LlmType};
 pub use context::ModelContext;
 pub use kv_cache::{AdvancedKVCache, KVCacheStats};
 pub use loader::ModelLoader;
+pub use qwen::QwenModel;
+pub use qwen2::{Qwen2MoEModel, Qwen2Model};
 pub use transformer::LlamaTransformer;

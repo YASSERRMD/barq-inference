@@ -133,7 +133,11 @@ impl BlockQ2K {
         }
 
         let d = f32_to_f16(if max_d > 0.0 { max_d / 15.0 } else { 0.0 });
-        let dmin = f32_to_f16(if max_abs_min > 0.0 { max_abs_min / 15.0 } else { 0.0 });
+        let dmin = f32_to_f16(if max_abs_min > 0.0 {
+            max_abs_min / 15.0
+        } else {
+            0.0
+        });
 
         BlockQ2K {
             scales,
