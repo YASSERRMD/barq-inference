@@ -47,12 +47,14 @@ pub mod ops;
 pub mod ops_ref;
 pub mod platform;
 pub mod prelude;
+pub mod prompt;
 pub mod quant;
 pub mod rope;
 pub mod simd;
 pub mod simd_softmax;
 pub mod softmax;
 pub mod tensor;
+pub mod testing;
 
 pub use context::Context;
 pub use error::{Error, Result};
@@ -63,3 +65,6 @@ pub use platform::{
 };
 pub use quant::{Dequantize, QuantizationType, Quantize};
 pub use tensor::{Tensor, TensorData, TensorType};
+
+#[cfg(test)]
+pub use testing::{BenchmarkTimer, TensorAssertions, TensorFixture, TestStats};

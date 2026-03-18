@@ -17,6 +17,10 @@ pub struct GEMMConfig {
     pub use_simd: bool,
     /// Whether to use loop unrolling (default: true)
     pub unroll: bool,
+    /// Cache-aware tiling (default: true)
+    pub cache_aware: bool,
+    /// Enable threading with rayon (default: false)
+    pub threaded: bool,
 }
 
 impl Default for GEMMConfig {
@@ -25,6 +29,54 @@ impl Default for GEMMConfig {
             block_size: 64,
             use_simd: true,
             unroll: true,
+            cache_aware: true,
+            threaded: false,
+        }
+    }
+}
+
+impl GEMMConfig {
+    /// Create configuration optimized for L1 cache (~32KB)
+    pub fn l1_optimized() -> Self {
+        Self {
+            block_size: 32,
+            use_simd: true,
+            unroll: true,
+            cache_aware: true,
+            threaded: false,
+        }
+    }
+
+    /// Create configuration optimized for L2 cache (~256KB)
+    pub fn l2_optimized() -> Self {
+        Self {
+            block_size: 128,
+            use_simd: true,
+            unroll: true,
+            cache_aware: true,
+            threaded: false,
+        }
+    }
+
+    /// Create configuration for large matrices (L3 cache)
+    pub fn l3_optimized() -> Self {
+        Self {
+            block_size: 256,
+            use_simd: true,
+            unroll: true,
+            cache_aware: true,
+            threaded: false,
+        }
+    }
+
+    /// Create configuration for multi-threaded GEMM
+    pub fn threaded() -> Self {
+        Self {
+            block_size: 128,
+            use_simd: true,
+            unroll: true,
+            cache_aware: true,
+            threaded: true,
         }
     }
 }
@@ -76,7 +128,10 @@ pub fn gemm_f32_with_config(
             use std::arch::x86_64::*;
 
             unsafe {
-                if is_x86_feature_detected!("avx2") {
+                // Prefer AVX-512 over AVX2 for better performance
+                if is_x86_feature_detected!("avx512f") {
+                    return gemm_avx512_blocked(a, b, c, m, n, k, config);
+                } else if is_x86_feature_detected!("avx2") {
                     return gemm_avx2_blocked(a, b, c, m, n, k, config);
                 }
             }
@@ -92,6 +147,83 @@ pub fn gemm_f32_with_config(
 
     // Fallback to blocked scalar implementation
     gemm_blocked_scalar(a, b, c, m, n, k, config)
+}
+
+/// Blocked GEMM with AVX-512 acceleration
+/// AVX-512 provides 512-bit registers (16 f32 values) for better throughput
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx512f")]
+unsafe fn gemm_avx512_blocked(
+    a: &[f32],
+    b: &[f32],
+    c: &mut [f32],
+    m: usize,
+    n: usize,
+    k: usize,
+    config: &GEMMConfig,
+) -> Result<()> {
+    use std::arch::x86_64::*;
+
+    let block_size = config.block_size;
+
+    // Clear output matrix
+    c.fill(0.0);
+
+    // Process in blocks for cache efficiency
+    for ii in (0..m).step_by(block_size) {
+        for jj in (0..n).step_by(block_size) {
+            for kk in (0..k).step_by(block_size) {
+                let i_end = (ii + block_size).min(m);
+                let j_end = (jj + block_size).min(n);
+                let k_end = (kk + block_size).min(k);
+
+                // Compute block: C[i:i_end, j:j_end] += A[i:i_end, k:k_end] @ B[k:k_end, j:j_end]
+                for i in ii..i_end {
+                    for k_idx in kk..k_end {
+                        let a_val = a[i * k + k_idx];
+
+                        // Broadcast a_val to all 16 lanes
+                        let a_vec = _mm512_set1_ps(a_val);
+
+                        // Load 16 elements of B at a time
+                        let mut j = jj;
+                        while j + 16 <= j_end {
+                            let b_vec = _mm512_loadu_ps(b.as_ptr().add(k_idx * n + j));
+                            let c_vec = _mm512_loadu_ps(c.as_mut_ptr().add(i * n + j));
+
+                            // FMA: c += a * b
+                            let result = _mm512_fmadd_ps(a_vec, b_vec, c_vec);
+                            _mm512_storeu_ps(c.as_mut_ptr().add(i * n + j), result);
+
+                            j += 16;
+                        }
+
+                        // Handle remaining elements with AVX2 (8 at a time)
+                        while j + 8 <= j_end {
+                            use std::arch::x86_64::*;
+                            let b_vec = _mm256_loadu_ps(b.as_ptr().add(k_idx * n + j));
+                            let c_vec = _mm256_loadu_ps(c.as_mut_ptr().add(i * n + j));
+
+                            // Convert AVX-512 vector to AVX-2
+                            let a_256 = _mm512_castps512_ps256(a_vec);
+                            let result = _mm256_fmadd_ps(a_256, b_vec, c_vec);
+                            _mm256_storeu_ps(c.as_mut_ptr().add(i * n + j), result);
+
+                            j += 8;
+                        }
+
+                        // Handle remaining elements scalar
+                        while j < j_end {
+                            c[i * n + j] += a_val * b[k_idx * n + j];
+                            j += 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
 }
 
 /// Blocked GEMM with AVX2 acceleration
@@ -157,6 +289,7 @@ unsafe fn gemm_avx2_blocked(
 }
 
 /// Blocked GEMM with NEON acceleration
+/// Enhanced with loop unrolling for better aarch64 performance
 #[cfg(target_arch = "aarch64")]
 #[target_feature(enable = "neon")]
 unsafe fn gemm_neon_blocked(
@@ -183,7 +316,7 @@ unsafe fn gemm_neon_blocked(
                 let j_end = (jj + block_size).min(n);
                 let k_end = (kk + block_size).min(k);
 
-                // Compute block
+                // Compute block with loop unrolling
                 for i in ii..i_end {
                     for k_idx in kk..k_end {
                         let a_val = a[i * k + k_idx];
@@ -191,13 +324,28 @@ unsafe fn gemm_neon_blocked(
                         // Broadcast a_val to all lanes
                         let a_vec = vdupq_n_f32(a_val);
 
-                        // Load 4 elements of B at a time
+                        // Load 4 elements of B at a time (unrolled to 8)
                         let mut j = jj;
+                        while j + 8 <= j_end {
+                            // First 4
+                            let b_vec0 = vld1q_f32(b.as_ptr().add(k_idx * n + j));
+                            let c_vec0 = vld1q_f32(c.as_mut_ptr().add(i * n + j));
+                            let result0 = vfmaq_f32(c_vec0, a_vec, b_vec0);
+                            vst1q_f32(c.as_mut_ptr().add(i * n + j), result0);
+
+                            // Second 4
+                            let b_vec1 = vld1q_f32(b.as_ptr().add(k_idx * n + j + 4));
+                            let c_vec1 = vld1q_f32(c.as_mut_ptr().add(i * n + j + 4));
+                            let result1 = vfmaq_f32(c_vec1, a_vec, b_vec1);
+                            vst1q_f32(c.as_mut_ptr().add(i * n + j + 4), result1);
+
+                            j += 8;
+                        }
+
+                        // Handle 4-element remaining
                         while j + 4 <= j_end {
                             let b_vec = vld1q_f32(b.as_ptr().add(k_idx * n + j));
                             let c_vec = vld1q_f32(c.as_mut_ptr().add(i * n + j));
-
-                            // FMA: c = a * b + c
                             let result = vfmaq_f32(c_vec, a_vec, b_vec);
                             vst1q_f32(c.as_mut_ptr().add(i * n + j), result);
 
@@ -327,6 +475,8 @@ mod tests {
             block_size: 32,
             use_simd: false,
             unroll: false,
+            cache_aware: false,
+            threaded: false,
         };
 
         let a = vec![1.0f32, 2.0, 3.0, 4.0];
