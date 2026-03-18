@@ -3,7 +3,7 @@
 use std::sync::{Arc, Mutex};
 
 use crate::sampler::{Sampler, SamplerType, TokenData};
-use core::error::{Error, Result};
+use barq_core::error::{Error, Result};
 
 /// Sampler chain
 ///
@@ -74,6 +74,12 @@ impl Sampler for SamplerChain {
 /// Shared sampler chain with thread-safe access
 pub struct SharedSamplerChain {
     chain: Arc<Mutex<SamplerChain>>,
+}
+
+impl Default for SharedSamplerChain {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl SharedSamplerChain {

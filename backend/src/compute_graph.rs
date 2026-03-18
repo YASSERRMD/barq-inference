@@ -2,8 +2,8 @@
 
 use std::collections::HashMap;
 
-use core::tensor::Tensor;
-use core::error::{Error, Result};
+use barq_core::error::{Error, Result};
+use barq_core::tensor::Tensor;
 
 /// Node in compute graph
 #[derive(Debug, Clone)]
@@ -44,7 +44,9 @@ impl ComputeGraph {
     }
 
     pub fn set_output(&mut self, node_id: usize, output: String) -> Result<()> {
-        let node = self.nodes.get_mut(node_id)
+        let node = self
+            .nodes
+            .get_mut(node_id)
             .ok_or_else(|| Error::tensor(format!("Invalid node ID: {}", node_id)))?;
         node.output = Some(output);
         Ok(())
@@ -60,7 +62,9 @@ impl ComputeGraph {
 
     pub fn execute(&mut self) -> Result<()> {
         // TODO: Implement graph execution
-        Err(Error::Unsupported("Graph execution not yet implemented".to_string()))
+        Err(Error::Unsupported(
+            "Graph execution not yet implemented".to_string(),
+        ))
     }
 }
 

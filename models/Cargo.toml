@@ -18,9 +18,11 @@ anyhow = { workspace = true }
 tracing = { workspace = true }
 parking_lot = { workspace = true }
 itertools = { workspace = true }
+rayon = { workspace = true }
 num_cpus = "1.16"
+rand = "0.8"
 
-core = { path = "../core" }
+barq_core = { path = "../barq_core" }
 vocab = { path = "../vocab" }
 
 [features]

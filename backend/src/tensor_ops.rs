@@ -1,7 +1,8 @@
 //! Tensor operations abstraction
 
-use core::tensor::{Tensor, TensorType, Shape};
-use core::error::{Error, Result};
+use barq_core::error::{Error, Result};
+use barq_core::ops::{BinaryOp, UnaryOp};
+use barq_core::tensor::Tensor;
 
 /// Tensor operation type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -63,13 +64,13 @@ pub struct CpuTensorOps;
 
 impl TensorOps for CpuTensorOps {
     fn add(&self, a: &Tensor, b: &Tensor) -> Result<Tensor> {
-        use core::ops::Add;
+        use barq_core::ops::Add;
         let op = Add;
         op.apply(a, b)
     }
 
     fn matmul(&self, a: &Tensor, b: &Tensor) -> Result<Tensor> {
-        use core::ops::MatMul;
+        use barq_core::ops::MatMul;
         let op = MatMul;
         op.apply(a, b)
     }
@@ -79,40 +80,46 @@ impl TensorOps for CpuTensorOps {
     }
 
     fn relu(&self, x: &Tensor) -> Result<Tensor> {
-        use core::ops::Relu;
+        use barq_core::ops::Relu;
         let op = Relu;
         op.apply(x)
     }
 
     fn gelu(&self, x: &Tensor) -> Result<Tensor> {
-        use core::ops::Gelu;
+        use barq_core::ops::Gelu;
         let op = Gelu;
         op.apply(x)
     }
 
     fn silu(&self, x: &Tensor) -> Result<Tensor> {
-        use core::ops::Silu;
+        use barq_core::ops::Silu;
         let op = Silu;
         op.apply(x)
     }
 
     fn softmax(&self, _x: &Tensor, _dim: usize) -> Result<Tensor> {
-        Err(Error::Unsupported("Softmax not yet implemented".to_string()))
+        Err(Error::Unsupported(
+            "Softmax not yet implemented".to_string(),
+        ))
     }
 
     fn layer_norm(&self, _x: &Tensor, _dim: usize) -> Result<Tensor> {
-        Err(Error::Unsupported("Layer norm not yet implemented".to_string()))
+        Err(Error::Unsupported(
+            "Layer norm not yet implemented".to_string(),
+        ))
     }
 
     fn rms_norm(&self, _x: &Tensor, _dim: usize) -> Result<Tensor> {
-        Err(Error::Unsupported("RMS norm not yet implemented".to_string()))
+        Err(Error::Unsupported(
+            "RMS norm not yet implemented".to_string(),
+        ))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use core::tensor::TensorData;
+    use barq_core::tensor::{Shape, Tensor, TensorData, TensorType};
 
     #[test]
     fn test_tensor_ops() {
@@ -123,7 +130,8 @@ mod tests {
             TensorType::F32,
             Shape::matrix(2, 2),
             TensorData::F32(vec![1.0, 2.0, 3.0, 4.0]),
-        ).unwrap();
+        )
+        .unwrap();
 
         let result = ops.relu(&a);
         assert!(result.is_ok());

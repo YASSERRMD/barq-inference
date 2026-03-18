@@ -1,7 +1,7 @@
 //! Top-k sampling implementation
 
 use crate::sampler::{Sampler, SamplerType, TokenData};
-use core::error::{Error, Result};
+use barq_core::error::{Error, Result};
 
 /// Top-k sampler
 ///
@@ -14,17 +14,11 @@ pub struct TopK {
 
 impl TopK {
     pub fn new(k: i32) -> Self {
-        Self {
-            k,
-            min_keep: 1,
-        }
+        Self { k, min_keep: 1 }
     }
 
     pub fn with_min_keep(k: i32, min_keep: usize) -> Self {
-        Self {
-            k,
-            min_keep,
-        }
+        Self { k, min_keep }
     }
 }
 
@@ -97,10 +91,7 @@ mod tests {
     #[test]
     fn test_top_k_zero() {
         let mut sampler = TopK::new(0);
-        let mut logits = vec![
-            TokenData::new(0, 1.0),
-            TokenData::new(1, 3.0),
-        ];
+        let mut logits = vec![TokenData::new(0, 1.0), TokenData::new(1, 3.0)];
 
         let token = sampler.sample(&mut logits).unwrap();
         assert_eq!(token, 1); // Greedy

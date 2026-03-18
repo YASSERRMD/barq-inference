@@ -1,8 +1,6 @@
 //! Device management and abstraction
 
-use std::sync::Arc;
-
-use core::error::{Error, Result};
+use barq_core::error::{Error, Result};
 
 /// Device type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -99,7 +97,7 @@ impl Device for CpuDevice {
 
     fn total_memory(&self) -> usize {
         // Get total system memory
-        #[cfg(unix)]
+        #[cfg(target_os = "linux")]
         {
             unsafe {
                 let mut info: libc::sysinfo = std::mem::zeroed();
@@ -108,12 +106,12 @@ impl Device for CpuDevice {
                 }
             }
         }
-        // Fallback
+        // Fallback for macOS and other platforms
         16 * 1024 * 1024 * 1024 // 16 GB
     }
 
     fn available_memory(&self) -> usize {
-        #[cfg(unix)]
+        #[cfg(target_os = "linux")]
         {
             unsafe {
                 let mut info: libc::sysinfo = std::mem::zeroed();
@@ -122,7 +120,7 @@ impl Device for CpuDevice {
                 }
             }
         }
-        // Fallback
+        // Fallback for macOS and other platforms
         8 * 1024 * 1024 * 1024 // 8 GB
     }
 

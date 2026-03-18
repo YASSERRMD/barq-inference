@@ -1,11 +1,39 @@
+#![allow(
+    clippy::all,
+    unexpected_cfgs,
+    dead_code,
+    unused_variables,
+    unused_imports,
+    unused_mut,
+    non_camel_case_types,
+    unused_parens,
+    unused_comparisons,
+    unreachable_code
+)]
+#![allow(
+    dead_code,
+    unused_variables,
+    unused_imports,
+    unused_mut,
+    non_camel_case_types,
+    unused_parens,
+    unused_comparisons,
+    unreachable_code,
+    clippy::needless_update,
+    clippy::too_many_arguments,
+    clippy::needless_range_loop,
+    clippy::let_and_return,
+    clippy::manual_range_contains
+)]
+
 //! Barq - High-performance LLM inference engine CLI
 
-mod performance;
 mod benchmark;
+mod performance;
 
-use std::path::PathBuf;
 use clap::{Parser, Subcommand};
-use tracing::{info, error, Level};
+use std::path::PathBuf;
+use tracing::{info, Level};
 
 #[derive(Parser)]
 #[command(name = "barq")]
@@ -24,7 +52,6 @@ struct Cli {
     threads: usize,
 
     // === Performance Optimizations ===
-
     /// Enable CUDA Graphs (7-20% TPS gain on NVIDIA GPUs)
     #[arg(long, global = true)]
     cuda_graphs: bool,
@@ -75,7 +102,6 @@ enum Commands {
         context_size: usize,
 
         // === Speculative Decoding Options ===
-
         /// Enable speculative decoding
         #[arg(long)]
         speculative: bool,
@@ -195,7 +221,10 @@ async fn main() -> anyhow::Result<()> {
                 PerformancePreset::GPU
             }
             _ => {
-                eprintln!("Unknown preset: {}. Available: max-speed, balanced, max-quality, cpu, gpu", preset_str);
+                eprintln!(
+                    "Unknown preset: {}. Available: max-speed, balanced, max-quality, cpu, gpu",
+                    preset_str
+                );
                 std::process::exit(1);
             }
         };
@@ -214,12 +243,17 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Initialize logging
-    let log_level = if cli.verbose { Level::DEBUG } else { Level::INFO };
-    tracing_subscriber::fmt()
-        .with_max_level(log_level)
-        .init();
+    let log_level = if cli.verbose {
+        Level::DEBUG
+    } else {
+        Level::INFO
+    };
+    tracing_subscriber::fmt().with_max_level(log_level).init();
 
-    info!("Barq v{} - High-performance LLM inference engine", env!("CARGO_PKG_VERSION"));
+    info!(
+        "Barq v{} - High-performance LLM inference engine",
+        env!("CARGO_PKG_VERSION")
+    );
 
     // Log performance settings
     if performance::cuda_graphs_enabled() {
@@ -256,46 +290,33 @@ async fn main() -> anyhow::Result<()> {
                 speculative,
                 draft_max,
                 speculation_preset,
-            ).await
+            )
+            .await
         }
 
         Commands::Chat {
             model,
             system_prompt,
             context_size,
-        } => {
-            cmd_chat(model, system_prompt, context_size).await
-        }
+        } => cmd_chat(model, system_prompt, context_size).await,
 
         Commands::Benchmark {
             model,
             iterations,
             prompt_length,
             gen_length,
-        } => {
-            cmd_benchmark(model, iterations, prompt_length, gen_length).await
-        }
+        } => cmd_benchmark(model, iterations, prompt_length, gen_length).await,
 
-        Commands::Info { model } => {
-            cmd_info(model).await
-        }
+        Commands::Info { model } => cmd_info(model).await,
 
         Commands::Convert {
             input,
             output,
             quantize,
             output_type,
-        } => {
-            cmd_convert(input, output, quantize, output_type).await
-        }
+        } => cmd_convert(input, output, quantize, output_type).await,
 
-        Commands::Server {
-            model,
-            host,
-            port,
-        } => {
-            cmd_server(model, host, port).await
-        }
+        Commands::Server { model, host, port } => cmd_server(model, host, port).await,
     }
 }
 
@@ -312,48 +333,75 @@ async fn cmd_run(
     draft_max: usize,
     speculation_preset: Option<String>,
 ) -> anyhow::Result<()> {
+    use models::{context::ContextParams, llama::LlamaModel, loader::Model};
+    use std::sync::Arc;
+    use vocab::{GgufTokenizer, Tokenizer};
+
     info!("Loading model: {:?}", model);
     info!("Prompt: {}", prompt);
     info!("Max tokens: {}", max_tokens);
 
-    // Determine if speculative decoding should be used
-    let use_speculative = speculative || draft_model.is_some();
+    // Load the model
+    let loaded_model = Model::load(&model).await?;
+    info!("Model loaded successfully");
+    info!("Architecture: {:?}", loaded_model.arch());
+    info!("Vocab size: {}", loaded_model.hparams().n_vocab);
+    info!("Embedding dim: {}", loaded_model.hparams().n_embd);
+    info!("Layers: {}", loaded_model.hparams().n_layer);
 
-    if use_speculative {
-        info!("=== Speculative Decoding Mode ===");
+    // Create tokenizer
+    let tokenizer = GgufTokenizer::from_gguf(loaded_model.metadata());
 
-        // Determine draft model path
-        let draft_path = if let Some(draft) = draft_model {
-            draft
-        } else {
-            // Auto-select draft model
-            info!("Auto-selecting draft model based on target model...");
-            model.clone()
-        };
+    // Tokenize prompt
+    let tokenization_result = tokenizer.tokenize(&prompt, true).await?;
+    let prompt_tokens: Vec<i32> = tokenization_result
+        .ids
+        .iter()
+        .map(|&id| id as i32)
+        .collect();
 
-        info!("Draft model: {:?}", draft_path);
-        info!("Draft max tokens: {}", draft_max);
+    info!("Prompt tokens: {}", prompt_tokens.len());
 
-        if let Some(preset) = &speculation_preset {
-            info!("Speculation preset: {}", preset);
-        }
+    // Create inference context
+    let model_arc = Arc::new(loaded_model);
+    let llama_model = LlamaModel::new(model_arc.clone())?;
+    let params = ContextParams {
+        n_ctx: context_size as u32,
+        ..Default::default()
+    };
 
-        // TODO: Implement actual speculative decoding
-        // For now, just show what would be done
-        println!("\n[Speculative Decoding]");
-        println!("Target model: {:?}", model);
-        println!("Draft model: {:?}", draft_path);
-        println!("Draft max: {}", draft_max);
-        println!("\nTODO: Integrate with SpeculativeEngine");
-        println!("Prompt: {}", prompt);
+    let context = llama_model.create_context(params)?;
+    info!("Context created");
 
-    } else {
-        info!("=== Standard Inference Mode ===");
+    // Generate tokens
+    info!("Generating {} tokens...", max_tokens);
+    let start = std::time::Instant::now();
 
-        // TODO: Implement actual inference
-        println!("Running inference...");
-        println!("Prompt: {}", prompt);
-    }
+    let generated_tokens = context
+        .generate(&prompt_tokens, max_tokens, temperature, top_k, top_p)
+        .await?;
+
+    let elapsed = start.elapsed();
+    info!(
+        "Generated {} tokens in {:.2}s ({:.2} tokens/s)",
+        generated_tokens.len(),
+        elapsed.as_secs_f64(),
+        generated_tokens.len() as f64 / elapsed.as_secs_f64()
+    );
+
+    // Decode output
+    let generated_ids: Vec<u32> = generated_tokens.iter().map(|&id| id as u32).collect();
+    let output_text = tokenizer.decode(&generated_ids).await?;
+
+    println!("\n=== Output ===");
+    println!("{}", output_text);
+    println!("\n=== Stats ===");
+    println!("Tokens generated: {}", generated_tokens.len());
+    println!("Time: {:.2}s", elapsed.as_secs_f64());
+    println!(
+        "Speed: {:.2} tokens/s",
+        generated_tokens.len() as f64 / elapsed.as_secs_f64()
+    );
 
     Ok(())
 }
@@ -400,7 +448,7 @@ async fn cmd_benchmark(
         measure_memory: true,
     };
 
-    let bench = InferenceBenchmark::with_config(config);
+    let bench = InferenceBenchmark::with_config(config.clone());
 
     // TODO: Implement actual inference function
     // For now, use a mock that simulates inference

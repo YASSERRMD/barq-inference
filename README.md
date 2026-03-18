@@ -225,15 +225,16 @@ barq-inference/
 
 ## Performance
 
-Compared to llama.cpp (single-threaded CPU):
+This is a new implementation currently under active development. Performance benchmarks will be added once the core functionality is complete and tested.
 
-| Model | llama.cpp | Barq Inference | Speedup |
-|-------|-----------|----------------|---------|
-| LLaMA-7B (Q4_0) | 35 tok/s | 52 tok/s | 1.48x |
-| Mixtral-8x7B (Q4_K) | 8 tok/s | 14 tok/s | 1.75x |
-| Qwen-14B (Q4_K) | 22 tok/s | 31 tok/s | 1.41x |
+Expected optimizations based on the implementation:
+- SIMD-accelerated operations (AVX-512, ARM NEON)
+- Efficient quantization support
+- Async I/O with Tokio
+- GPU acceleration support (CUDA, Metal)
+- Cache-aware algorithms
 
-*Benchmarks on Apple M1 Max, 8 threads, Q4_K quantization*
+If you would like to run benchmarks, see the `examples/benchmark.rs` file for a template.
 
 ## Development
 
@@ -255,13 +256,24 @@ cargo bench
 
 ### Project Status
 
+**Completed Phases:**
 - Phase 1: Core tensor library
 - Phase 2-3: GGUF format and tokenization
 - Phase 4-5: Model architectures
 - Phase 6-7: KV cache and attention
 - Phase 8: Sampling algorithms
 - Phase 9: Backend abstraction
-- Phase 10-14: CLI, tests, documentation
+- Phase 10-16: CLI, tests, documentation
+- Phase 17: Quantization pipeline (Q4, Q5, Q8, K-quants)
+- Phase 18: Model architecture expansion (Qwen, DeepSeek, architecture registry)
+- Phase 19: Grammar system (GBNF parser, grammar-guided sampling, JSON mode)
+- Phase 20: CPU optimization (AVX-512, ARM NEON, cache-aware GEMM, prompt caching)
+- Phase 21: CUDA backend (device management, quantized kernels, Flash Attention, multi-GPU)
+- Phase 22: Metal backend (Apple Silicon GPU support, unified memory)
+- Phase 23-24: Network API and monitoring
+- Phase 25: Testing infrastructure (comprehensive test suite, benchmarks)
+- Phase 26: Packaging and release automation
+- Phase 27: Documentation and examples (user guide, performance guide)
 
 ## Contributing
 

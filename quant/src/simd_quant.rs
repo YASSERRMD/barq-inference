@@ -2,7 +2,7 @@
 //!
 //! This module provides accelerated dequantization using SIMD intrinsics
 
-use core::error::Result;
+use barq_core::error::Result;
 
 /// Dequantize Q4_0 block using SIMD
 ///
@@ -26,12 +26,8 @@ pub fn dequantize_q4_0_simd(
 
     #[cfg(target_arch = "aarch64")]
     {
-        use std::arch::aarch64::*;
-
         unsafe {
-            if is_aarch64_feature_detected!("neon") {
-                return dequantize_q4_0_neon(quants, scales, block_size, output);
-            }
+            return dequantize_q4_0_neon(quants, scales, block_size, output);
         }
     }
 
@@ -56,7 +52,7 @@ fn dequantize_q4_0_scalar(
         for i in start..end {
             let rel_idx = i - start;
             let byte_idx = rel_idx / 2;
-            let shift = if rel_idx % 2 == 0 { 0 } else { 4 };
+            let shift = if rel_idx.is_multiple_of(2) { 0 } else { 4 };
 
             if q_offset + byte_idx < quants.len() {
                 let q = ((quants[q_offset + byte_idx] >> shift) & 0x0F) as i8;
@@ -65,7 +61,7 @@ fn dequantize_q4_0_scalar(
             }
         }
 
-        q_offset += (block_size + 1) / 2;
+        q_offset += block_size.div_ceil(2);
     }
 
     Ok(())
@@ -166,7 +162,7 @@ unsafe fn dequantize_q4_0_neon(
             for j in 0..4 {
                 let rel_idx = (i + j) - start;
                 let byte_idx = rel_idx / 2;
-                let shift = if rel_idx % 2 == 0 { 0 } else { 4 };
+                let shift = if rel_idx.is_multiple_of(2) { 0 } else { 4 };
 
                 if q_offset + byte_idx < quants.len() {
                     let q = ((quants[q_offset + byte_idx] >> shift) & 0x0F) as i8;
@@ -177,7 +173,7 @@ unsafe fn dequantize_q4_0_neon(
 
             // Load and multiply by scale
             let vals = vld1q_f32(deq_vals.as_ptr());
-            let result = vfmulq_f32(vals, scale_vec);
+            let result = vmulq_f32(vals, scale_vec);
             vst1q_f32(output.as_mut_ptr().add(i), result);
 
             i += 4;
@@ -187,7 +183,7 @@ unsafe fn dequantize_q4_0_neon(
         while i < end {
             let rel_idx = i - start;
             let byte_idx = rel_idx / 2;
-            let shift = if rel_idx % 2 == 0 { 0 } else { 4 };
+            let shift = if rel_idx.is_multiple_of(2) { 0 } else { 4 };
 
             if q_offset + byte_idx < quants.len() {
                 let q = ((quants[q_offset + byte_idx] >> shift) & 0x0F) as i8;
@@ -197,7 +193,7 @@ unsafe fn dequantize_q4_0_neon(
             i += 1;
         }
 
-        q_offset += (block_size + 1) / 2;
+        q_offset += block_size.div_ceil(2);
     }
 
     Ok(())
@@ -227,7 +223,11 @@ pub fn matmul_q4_0_simd(
                 let b_block_idx = (l * n + j) / 32;
                 let b_pos_in_block = (l * n + j) % 32;
                 let b_byte_idx = b_pos_in_block / 2;
-                let b_shift = if b_pos_in_block % 2 == 0 { 0 } else { 4 };
+                let b_shift = if b_pos_in_block.is_multiple_of(2) {
+                    0
+                } else {
+                    4
+                };
 
                 if b_block_idx < b_scales.len() {
                     let b_scale = b_scales[b_block_idx];
@@ -265,7 +265,7 @@ mod tests {
         // Create quantized data
         let mut quants = Vec::new();
         for _ in 0..n_blocks {
-            for _ in 0..(block_size + 1) / 2 {
+            for _ in 0..block_size.div_ceil(2) {
                 quants.push(0x88); // Pattern: 8, 8, 8, 8, ...
             }
         }
