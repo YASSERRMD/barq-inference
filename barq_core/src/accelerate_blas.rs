@@ -99,14 +99,12 @@ pub fn sgemm(a: &[f32], b: &[f32], m: usize, k: usize, n: usize) -> Result<Vec<f
     Ok(c)
 }
 
-/// Matrix-vector multiplication using Apple Accelerate
-///
-/// TEMPORARILY DISABLED: FFI binding issues
+/// Matrix-vector multiplication using Apple Accelerate (via sgemm with m=1)
 #[cfg(target_os = "macos")]
-pub fn sgemv(_a: &[f32], _x: &[f32], _m: usize, _n: usize) -> Result<Vec<f32>> {
-    Err(Error::Unsupported(
-        "Accelerate FFI temporarily disabled".to_string(),
-    ))
+pub fn sgemv(a: &[f32], x: &[f32], m: usize, n: usize) -> Result<Vec<f32>> {
+    // A is (m, n), x is (n,) → result is (m,)
+    // Treat x as a column matrix (n, 1) and call sgemm
+    sgemm(a, x, m, n, 1)
 }
 
 // Stub implementations for non-macOS platforms

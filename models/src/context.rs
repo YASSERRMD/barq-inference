@@ -179,6 +179,8 @@ pub struct ModelContext {
     kv_cache: Arc<Mutex<KVCache>>,
     /// Current position
     pos: Arc<Mutex<usize>>,
+    /// Transformer (holds dequantised weight cache – create once)
+    transformer: Arc<crate::transformer::LlamaTransformer>,
 }
 
 /// KV cache for attention
@@ -244,11 +246,15 @@ impl ModelContext {
         let n_layer = model.hparams.n_layer as usize;
         let kv_cache = KVCache::new(n_ctx, n_layer);
 
+        // Build transformer + weight cache ONCE
+        let transformer = Arc::new(crate::transformer::LlamaTransformer::new(model.clone())?);
+
         Ok(Self {
             model,
             params,
             kv_cache: Arc::new(Mutex::new(kv_cache)),
             pos: Arc::new(Mutex::new(0)),
+            transformer,
         })
     }
 
@@ -259,28 +265,17 @@ impl ModelContext {
 
     /// Encode a batch of tokens (no KV cache)
     pub async fn encode(&self, batch: &Batch) -> Result<Vec<f32>> {
-        use crate::transformer::LlamaTransformer;
-
-        let transformer = LlamaTransformer::new(self.model.clone())?;
-
-        // Run forward pass through all transformer layers
         let mut cache = self.kv_cache.lock().await;
-        let logits = transformer.forward(&batch.token, &mut cache)?;
-
+        let logits = self.transformer.forward(&batch.token, &mut cache)?;
         Ok(logits)
     }
 
     /// Decode a batch of tokens (uses KV cache)
     pub async fn decode(&self, batch: &Batch) -> Result<Vec<f32>> {
-        use crate::transformer::LlamaTransformer;
-
-        let transformer = LlamaTransformer::new(self.model.clone())?;
-
         let mut pos = self.pos.lock().await;
         let mut cache = self.kv_cache.lock().await;
 
-        // Run forward pass with KV cache
-        let logits = transformer.forward(&batch.token, &mut cache)?;
+        let logits = self.transformer.forward(&batch.token, &mut cache)?;
 
         *pos += batch.n_tokens as usize;
 

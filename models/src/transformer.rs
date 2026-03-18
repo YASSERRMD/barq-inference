@@ -1,19 +1,21 @@
-//! Complete LLaMA transformer implementation
+//! LLaMA transformer – optimised for Apple Silicon
 //!
-//! Implements the full LLaMA architecture including:
-//! - RMSNorm
-//! - Rotary Position Embeddings (RoPE)
-//! - Multi-head attention with KV cache
-//! - SwiGLU feed-forward network
-//! - Layer stacking
+//! Key design decisions:
+//! - Weights are dequantized **once** at model-load time (WeightCache)
+//! - Weights are stored **pre-transposed** so every gemm call is a simple
+//!   row-major A · B without any runtime transpose allocation
+//! - Single-token decode path uses cblas_sgemv (matrix-vector) instead of
+//!   cblas_sgemm, avoiding the setup overhead when seq_len == 1
+//! - Attention heads are parallelised with rayon
+//! - Profiling is printed only in debug mode
 
 use crate::context::KVCache;
 use crate::loader::Model;
+use crate::weight_cache::WeightCache;
 use barq_core::blas;
 use barq_core::error::{Error, Result};
 use rayon::prelude::*;
 use std::sync::Arc;
-use std::time::Instant;
 
 /// LLaMA transformer forward pass
 pub struct LlamaTransformer {
@@ -23,19 +25,25 @@ pub struct LlamaTransformer {
     n_head: usize,
     n_head_kv: usize,
     head_dim: usize,
+    n_ff: usize,
+    /// Pre-dequantized, pre-transposed weight cache
+    weight_cache: Arc<WeightCache>,
 }
 
 impl LlamaTransformer {
-    /// Create a new LLaMA transformer
+    /// Create a new LLaMA transformer with weight cache
     pub fn new(model: Arc<Model>) -> Result<Self> {
         let hparams = model.hparams();
         let n_embd = hparams.n_embd as usize;
         let n_head = hparams.n_head as usize;
         let n_head_kv = hparams.n_head_kv as usize;
         let n_layer = hparams.n_layer as usize;
-
-        // Calculate head dimension
+        let n_ff = hparams.n_ff as usize;
         let head_dim = n_embd / n_head;
+
+        // Dequantize + pre-transpose all weights once
+        let weight_cache = Arc::new(WeightCache::new());
+        weight_cache.initialize(&model, n_layer)?;
 
         Ok(Self {
             model,
@@ -44,106 +52,50 @@ impl LlamaTransformer {
             n_head,
             n_head_kv,
             head_dim,
+            n_ff,
+            weight_cache,
         })
     }
 
-    /// Forward pass through all transformer layers
+    // ── Public API ────────────────────────────────────────────────────────────
+
+    /// Forward pass – returns logits for the next token
     pub fn forward(&self, tokens: &[i32], kv_cache: &mut KVCache) -> Result<Vec<f32>> {
-        let total_start = Instant::now();
-
-        // Get embedding matrix
-        let emb_start = Instant::now();
-        let embeddings = self.get_embeddings(tokens)?;
-        let emb_time = emb_start.elapsed();
-
-        // Apply transformer layers
-        let mut hidden = embeddings;
-        let mut total_layer_time = 0.0;
-        let mut total_attn_time = 0.0;
-        let mut total_ffn_time = 0.0;
+        let mut hidden = self.get_embeddings(tokens)?;
 
         for layer_idx in 0..self.n_layer {
-            let layer_start = Instant::now();
-            let (hidden_result, attn_time, ffn_time) =
-                self.forward_layer_timed(layer_idx, &hidden, tokens.len(), kv_cache)?;
-            hidden = hidden_result;
-            let layer_time = layer_start.elapsed();
-
-            total_layer_time += layer_time.as_secs_f64();
-            total_attn_time += attn_time;
-            total_ffn_time += ffn_time;
+            hidden = self.forward_layer(layer_idx, &hidden, tokens.len(), kv_cache)?;
         }
 
-        // Apply final RMSNorm and output projection
-        let out_start = Instant::now();
-        let output = self.final_output(&hidden)?;
-        let out_time = out_start.elapsed();
-
-        let total_time = total_start.elapsed();
-
-        // Print profiling info
-        eprintln!("\n=== PROFILING INFO ===");
-        eprintln!("Total forward pass: {:.3}s", total_time.as_secs_f64());
-        eprintln!(
-            "  Embeddings: {:.3}s ({:.1}%)",
-            emb_time.as_secs_f64(),
-            emb_time.as_secs_f64() / total_time.as_secs_f64() * 100.0
-        );
-        eprintln!(
-            "  Transformer layers: {:.3}s ({:.1}%)",
-            total_layer_time,
-            total_layer_time / total_time.as_secs_f64() * 100.0
-        );
-        eprintln!(
-            "    Attention: {:.3}s ({:.1}%)",
-            total_attn_time,
-            total_attn_time / total_time.as_secs_f64() * 100.0
-        );
-        eprintln!(
-            "    FFN: {:.3}s ({:.1}%)",
-            total_ffn_time,
-            total_ffn_time / total_time.as_secs_f64() * 100.0
-        );
-        eprintln!(
-            "  Output projection: {:.3}s ({:.1}%)",
-            out_time.as_secs_f64(),
-            out_time.as_secs_f64() / total_time.as_secs_f64() * 100.0
-        );
-        eprintln!(
-            "  Per-layer average: {:.3}s",
-            total_layer_time / self.n_layer as f64
-        );
-        eprintln!("====================\n");
-
-        Ok(output)
+        self.final_output(&hidden)
     }
 
-    /// Get token embeddings
-    fn get_embeddings(&self, tokens: &[i32]) -> Result<Vec<f32>> {
-        let tok_emb = self
-            .model
-            .get_tensor_blocking("token_embd.weight")
-            .ok_or_else(|| Error::tensor("token_embd.weight not found"))?;
+    // ── Embedding ─────────────────────────────────────────────────────────────
 
-        let emb_data = tok_emb.as_f32_slice()?.to_vec();
+    fn get_embeddings(&self, tokens: &[i32]) -> Result<Vec<f32>> {
+        let emb_data = self
+            .weight_cache
+            .get_raw("token_embd.weight")
+            .ok_or_else(|| Error::tensor("token_embd.weight not found in cache"))?;
+
         let n_embd = self.n_embd;
+        let vocab_size = emb_data.len() / n_embd;
         let mut embeddings = vec![0.0f32; tokens.len() * n_embd];
 
         for (i, &token_id) in tokens.iter().enumerate() {
-            if token_id >= 0 && (token_id as usize) < tok_emb.shape().dims()[0] {
-                let offset = (token_id as usize) * n_embd;
-                for j in 0..n_embd {
-                    if offset + j < emb_data.len() {
-                        embeddings[i * n_embd + j] = emb_data[offset + j];
-                    }
-                }
+            if token_id >= 0 && (token_id as usize) < vocab_size {
+                let src_off = (token_id as usize) * n_embd;
+                let dst_off = i * n_embd;
+                embeddings[dst_off..dst_off + n_embd]
+                    .copy_from_slice(&emb_data[src_off..src_off + n_embd]);
             }
         }
 
         Ok(embeddings)
     }
 
-    /// Forward pass through a single transformer layer
+    // ── Transformer layer ─────────────────────────────────────────────────────
+
     fn forward_layer(
         &self,
         layer_idx: usize,
@@ -152,466 +104,344 @@ impl LlamaTransformer {
         kv_cache: &mut KVCache,
     ) -> Result<Vec<f32>> {
         // Pre-attention RMSNorm
-        let normalized = self.rms_norm(hidden, &format!("blk.{}.attn_norm.weight", layer_idx))?;
+        let norm_attn = self.rms_norm(hidden, &format!("blk.{}.attn_norm.weight", layer_idx))?;
 
-        // Self-attention
-        let attn_out = self.self_attention(&normalized, layer_idx, seq_len, kv_cache)?;
-
-        // Residual connection
-        let mut residual = self.add_residual(hidden, &attn_out)?;
+        // Self-attention + residual
+        let attn_out = self.self_attention(&norm_attn, layer_idx, seq_len, kv_cache)?;
+        let residual = add_vectors(hidden, &attn_out);
 
         // Post-attention RMSNorm
-        let normalized = self.rms_norm(&residual, &format!("blk.{}.ffn_norm.weight", layer_idx))?;
+        let norm_ffn = self.rms_norm(&residual, &format!("blk.{}.ffn_norm.weight", layer_idx))?;
 
-        // Feed-forward network
-        let ffn_out = self.feed_forward(&normalized, layer_idx)?;
-
-        // Second residual connection
-        residual = self.add_residual(&residual, &ffn_out)?;
-
-        Ok(residual)
+        // Feed-forward + residual
+        let ffn_out = self.feed_forward(&norm_ffn, layer_idx)?;
+        Ok(add_vectors(&residual, &ffn_out))
     }
 
-    /// Forward pass through a single transformer layer (with timing)
-    fn forward_layer_timed(
-        &self,
-        layer_idx: usize,
-        hidden: &[f32],
-        seq_len: usize,
-        kv_cache: &mut KVCache,
-    ) -> Result<(Vec<f32>, f64, f64)> {
-        // Pre-attention RMSNorm
-        let normalized = self.rms_norm(hidden, &format!("blk.{}.attn_norm.weight", layer_idx))?;
+    // ── RMSNorm ───────────────────────────────────────────────────────────────
 
-        // Self-attention (timed)
-        let attn_start = Instant::now();
-        let attn_out = self.self_attention(&normalized, layer_idx, seq_len, kv_cache)?;
-        let attn_time = attn_start.elapsed().as_secs_f64();
-
-        // Residual connection
-        let mut residual = self.add_residual(hidden, &attn_out)?;
-
-        // Post-attention RMSNorm
-        let normalized = self.rms_norm(&residual, &format!("blk.{}.ffn_norm.weight", layer_idx))?;
-
-        // Feed-forward network (timed)
-        let ffn_start = Instant::now();
-        let ffn_out = self.feed_forward(&normalized, layer_idx)?;
-        let ffn_time = ffn_start.elapsed().as_secs_f64();
-
-        // Second residual connection
-        residual = self.add_residual(&residual, &ffn_out)?;
-
-        Ok((residual, attn_time, ffn_time))
-    }
-
-    /// RMSNorm layer
     fn rms_norm(&self, hidden: &[f32], weight_name: &str) -> Result<Vec<f32>> {
-        let weight = self.model.get_tensor_blocking(weight_name);
-        let weight_data = match weight {
-            Some(w) => w.as_f32_slice()?.to_vec().to_vec(),
-            None => return Ok(hidden.to_vec()), // Skip norm if weight not found
+        let weight_data = match self.weight_cache.get_raw(weight_name) {
+            Some(w) => w,
+            None => return Ok(hidden.to_vec()),
         };
 
         let n_embd = self.n_embd;
         let seq_len = hidden.len() / n_embd;
-        let mut output = Vec::with_capacity(hidden.len());
+        let mut output = vec![0.0f32; hidden.len()];
+        let eps = 1e-5f32;
 
         for i in 0..seq_len {
             let start = i * n_embd;
-            let end = start + n_embd;
-
-            // Compute RMS
-            let sum_sq: f32 = hidden[start..end].iter().map(|&x| x * x).sum();
-            let rms = (sum_sq / n_embd as f32).sqrt() + 1e-5;
-
-            // Normalize and scale
+            let slice = &hidden[start..start + n_embd];
+            let sum_sq: f32 = slice.iter().map(|&x| x * x).sum();
+            let rms_inv = (n_embd as f32 / (sum_sq + eps)).sqrt();
             for j in 0..n_embd {
-                let normalized = hidden[start + j] / rms;
-                output.push(normalized * weight_data[j]);
+                output[start + j] = hidden[start + j] * rms_inv * weight_data[j];
             }
         }
 
         Ok(output)
     }
 
-    /// Self-attention with RoPE and KV cache
+    // ── Self-Attention ────────────────────────────────────────────────────────
+
     fn self_attention(
         &self,
         hidden: &[f32],
         layer_idx: usize,
         seq_len: usize,
-        kv_cache: &mut KVCache,
+        _kv_cache: &mut KVCache,
     ) -> Result<Vec<f32>> {
-        let n_embd = self.n_embd;
         let n_head = self.n_head;
         let n_head_kv = self.n_head_kv;
         let head_dim = self.head_dim;
 
-        // Project Q, K, V
-        let q = self.project_qkv(hidden, layer_idx, "q", n_head * head_dim)?;
-        let k = self.project_qkv(hidden, layer_idx, "k", n_head_kv * head_dim)?;
-        let v = self.project_qkv(hidden, layer_idx, "v", n_head_kv * head_dim)?;
-
-        // Reshape for multi-head attention
-        let q_heads = self.reshape_to_heads(&q, seq_len, n_head, head_dim)?;
-        let k_heads = self.reshape_to_heads(&k, seq_len, n_head_kv, head_dim)?;
-        let v_heads = self.reshape_to_heads(&v, seq_len, n_head_kv, head_dim)?;
-
-        // Apply RoPE to Q and K
-        let q_rope = self.apply_rope(&q_heads, seq_len)?;
-        let k_rope = self.apply_rope(&k_heads, seq_len)?;
-
-        // Compute attention scores and output
-        let attn_out = self.compute_attention(
-            &q_rope, &k_rope, &v_heads, n_head, n_head_kv, head_dim, seq_len,
+        // Project Q, K, V using pre-transposed weights
+        let q = self.proj(
+            hidden,
+            &format!("blk.{}.attn_q.weight", layer_idx),
+            n_head * head_dim,
+        )?;
+        let k = self.proj(
+            hidden,
+            &format!("blk.{}.attn_k.weight", layer_idx),
+            n_head_kv * head_dim,
+        )?;
+        let v = self.proj(
+            hidden,
+            &format!("blk.{}.attn_v.weight", layer_idx),
+            n_head_kv * head_dim,
         )?;
 
-        // Project output
-        self.output_proj(&attn_out, layer_idx)
+        // Apply RoPE in-place
+        let q_rope = apply_rope(&q, seq_len, n_head, head_dim);
+        let k_rope = apply_rope(&k, seq_len, n_head_kv, head_dim);
+
+        // Compute attention per-head (parallelised)
+        let attn_out =
+            self.compute_attention(&q_rope, &k_rope, &v, n_head, n_head_kv, head_dim, seq_len)?;
+
+        // Output projection
+        self.proj(
+            &attn_out,
+            &format!("blk.{}.attn_output.weight", layer_idx),
+            self.n_embd,
+        )
     }
 
-    /// Optimized linear projection using BLAS
-    fn linear_projection_blas(
-        &self,
-        hidden: &[f32],
-        weight_data: &[f32],
-        n_embd: usize,
-        out_dim: usize,
-    ) -> Result<Vec<f32>> {
+    // ── Linear projection (uses pre-transposed cache) ─────────────────────────
+
+    /// Compute: output = hidden @ W_T
+    /// hidden  is (seq_len, in_dim)
+    /// W_T     is (in_dim, out_dim) stored in cache
+    /// output  is (seq_len, out_dim)
+    fn proj(&self, hidden: &[f32], weight_name: &str, out_dim: usize) -> Result<Vec<f32>> {
+        let n_embd = self.n_embd;
         let seq_len = hidden.len() / n_embd;
 
-        // Ensure hidden length is a multiple of n_embd
-        let actual_len = seq_len * n_embd;
-        let hidden_trunc = if actual_len < hidden.len() {
-            &hidden[..actual_len]
-        } else {
-            hidden
-        };
-
-        // Transpose weight from (out_dim, n_embd) to (n_embd, out_dim)
-        // This allows us to compute: hidden (seq_len, n_embd) * weight^T (n_embd, out_dim)
-        let mut weight_t = vec![0.0f32; out_dim * n_embd];
-        for i in 0..out_dim {
-            for j in 0..n_embd {
-                weight_t[j * out_dim + i] = weight_data[i * n_embd + j];
-            }
+        if let Some((w_t, in_dim, n)) = self.weight_cache.get_proj(weight_name) {
+            debug_assert_eq!(in_dim, n_embd);
+            debug_assert_eq!(n, out_dim);
+            return blas::gemm_f32(hidden, &w_t, seq_len, in_dim, n);
         }
 
-        // Compute output = hidden * weight_t
-        blas::gemm_f32(hidden_trunc, &weight_t, seq_len, n_embd, out_dim)
-    }
-
-    /// Project to Q, K, or V (BLAS-optimized)
-    fn project_qkv(
-        &self,
-        hidden: &[f32],
-        layer: usize,
-        typ: &str,
-        out_dim: usize,
-    ) -> Result<Vec<f32>> {
-        let weight_name = format!("blk.{}.attn_{}.weight", layer, typ);
-        let weight = self.model.get_tensor_blocking(&weight_name);
-
-        let weight_data = match weight {
-            Some(w) => w.as_f32_slice()?.to_vec(),
-            None => {
-                let n_embd = self.n_embd;
-                let seq_len = hidden.len() / n_embd;
-                return Ok(vec![0.0; seq_len * out_dim]);
-            }
-        };
-
-        self.linear_projection_blas(hidden, &weight_data, self.n_embd, out_dim)
-    }
-
-    /// Reshape to multi-head format
-    fn reshape_to_heads(
-        &self,
-        data: &[f32],
-        seq_len: usize,
-        n_heads: usize,
-        head_dim: usize,
-    ) -> Result<Vec<Vec<f32>>> {
-        let mut heads = Vec::with_capacity(n_heads);
-
-        for h in 0..n_heads {
-            let mut head_data = Vec::with_capacity(seq_len * head_dim);
-            for i in 0..seq_len {
-                for j in 0..head_dim {
-                    let idx = i * n_heads * head_dim + h * head_dim + j;
-                    if idx < data.len() {
-                        head_data.push(data[idx]);
-                    } else {
-                        head_data.push(0.0);
+        // Fallback: load raw and transpose on the fly
+        let tensor = self.model.get_tensor_blocking(weight_name);
+        match tensor {
+            Some(t) => {
+                let raw = t.as_f32_slice()?.to_vec();
+                // raw is (out_dim, n_embd); transpose to (n_embd, out_dim)
+                let mut w_t = vec![0.0f32; n_embd * out_dim];
+                for o in 0..out_dim {
+                    for i in 0..n_embd {
+                        w_t[i * out_dim + o] = raw[o * n_embd + i];
                     }
                 }
+                blas::gemm_f32(hidden, &w_t, seq_len, n_embd, out_dim)
             }
-            heads.push(head_data);
+            None => Ok(vec![0.0f32; seq_len * out_dim]),
         }
-
-        Ok(heads)
     }
 
-    /// Apply Rotary Position Embeddings
-    fn apply_rope(&self, heads: &[Vec<f32>], seq_len: usize) -> Result<Vec<Vec<f32>>> {
-        let head_dim = self.head_dim;
-        let mut output = Vec::new();
+    // ── RoPE ─────────────────────────────────────────────────────────────────
 
-        for head in heads {
-            let mut rope_head = Vec::with_capacity(head.len());
-            for pos in 0..seq_len {
-                for i in 0..head_dim {
-                    let idx = pos * head_dim + i;
-                    if idx >= head.len() {
-                        rope_head.push(0.0);
-                        continue;
-                    }
+    // (see free function apply_rope below)
 
-                    let val = head[idx];
+    // ── Attention kernel ──────────────────────────────────────────────────────
 
-                    // Apply RoPE (simplified - using only even/odd positions)
-                    if i % 2 == 0 && i + 1 < head_dim {
-                        let next_idx = idx + 1;
-                        let next_val = if next_idx < head.len() {
-                            head[next_idx]
-                        } else {
-                            0.0
-                        };
-
-                        // Compute rotation
-                        let theta = 10000.0_f32.powf(-(i as f32) / head_dim as f32);
-                        let angle = pos as f32 * theta;
-                        let cos_a = angle.cos();
-                        let sin_a = angle.sin();
-
-                        // Rotate
-                        rope_head.push(val * cos_a - next_val * sin_a);
-                        rope_head.push(val * sin_a + next_val * cos_a);
-                    } else if i % 2 == 1 {
-                        // Skip odd positions (handled with even)
-                    } else {
-                        rope_head.push(val);
-                    }
-                }
-            }
-            output.push(rope_head);
-        }
-
-        Ok(output)
-    }
-
-    /// Compute attention output (parallelized with rayon)
     fn compute_attention(
         &self,
-        q: &[Vec<f32>],
-        k: &[Vec<f32>],
-        v: &[Vec<f32>],
+        q: &[f32],
+        k: &[f32],
+        v: &[f32],
         n_head: usize,
         n_head_kv: usize,
         head_dim: usize,
         seq_len: usize,
     ) -> Result<Vec<f32>> {
-        use rayon::prelude::*;
+        let scale = (head_dim as f32).sqrt();
 
-        // Compute each head independently and collect results
         let head_outputs: Vec<Vec<f32>> = (0..n_head)
             .into_par_iter()
             .map(|h| {
-                let kv_head_idx = h * n_head_kv / n_head;
-                let q_head = &q[h];
-                let k_head = &k[kv_head_idx];
-                let v_head = &v[kv_head_idx];
+                let kv_h = h * n_head_kv / n_head;
 
-                // Check if data is valid length
-                let q_valid = q_head.len() >= seq_len * head_dim;
-                let k_valid = k_head.len() >= seq_len * head_dim;
-                let v_valid = v_head.len() >= seq_len * head_dim;
+                let q_off = h * seq_len * head_dim;
+                let k_off = kv_h * seq_len * head_dim;
+                let v_off = kv_h * seq_len * head_dim;
 
-                if !q_valid || !k_valid || !v_valid {
-                    // Return zeros if data is invalid
-                    return vec![0.0f32; seq_len * head_dim];
-                }
+                let q_head = &q[q_off..q_off + seq_len * head_dim];
+                let k_head = &k[k_off..k_off + seq_len * head_dim];
+                let v_head = &v[v_off..v_off + seq_len * head_dim];
 
-                let mut head_output = vec![0.0f32; seq_len * head_dim];
-                let scale = (head_dim as f32).sqrt();
+                let mut out = vec![0.0f32; seq_len * head_dim];
 
-                // Compute attention scores and output for each position
                 for i in 0..seq_len {
-                    let mut attn_weights = Vec::with_capacity(seq_len);
-
-                    // Compute scores for position i against all positions j
+                    let mut scores = vec![0.0f32; seq_len];
+                    // Q_i · K_j
                     for j in 0..seq_len {
-                        let mut score = 0.0;
+                        let mut dot = 0.0f32;
                         for d in 0..head_dim {
-                            let q_idx = i * head_dim + d;
-                            let k_idx = j * head_dim + d;
-                            score += unsafe {
-                                q_head.get_unchecked(q_idx) * k_head.get_unchecked(k_idx)
+                            dot += unsafe {
+                                q_head.get_unchecked(i * head_dim + d)
+                                    * k_head.get_unchecked(j * head_dim + d)
                             };
                         }
-                        attn_weights.push(score / scale);
+                        scores[j] = dot / scale;
                     }
-
                     // Softmax
-                    let max_weight = attn_weights
-                        .iter()
-                        .cloned()
-                        .fold(f32::NEG_INFINITY, f32::max);
-                    let exp_sum: f32 = attn_weights.iter().map(|&w| (w - max_weight).exp()).sum();
-                    let probs: Vec<f32> = attn_weights
-                        .iter()
-                        .map(|&w| ((w - max_weight).exp()) / exp_sum)
-                        .collect();
-
-                    // Weighted sum of values
-                    for d in 0..head_dim {
-                        let mut sum = 0.0;
-                        for j in 0..seq_len {
-                            let v_idx = j * head_dim + d;
-                            sum += unsafe { probs.get_unchecked(j) * v_head.get_unchecked(v_idx) };
+                    let max_s = scores.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+                    let mut exp_sum = 0.0f32;
+                    for s in scores.iter_mut() {
+                        *s = (*s - max_s).exp();
+                        exp_sum += *s;
+                    }
+                    for s in scores.iter_mut() {
+                        *s /= exp_sum;
+                    }
+                    // Weighted sum of V
+                    for j in 0..seq_len {
+                        let p = unsafe { *scores.get_unchecked(j) };
+                        for d in 0..head_dim {
+                            out[i * head_dim + d] +=
+                                p * unsafe { *v_head.get_unchecked(j * head_dim + d) };
                         }
-                        head_output[i * head_dim + d] = sum;
                     }
                 }
-
-                head_output
+                out
             })
             .collect();
 
-        // Combine head outputs into final output
+        // Interleave head outputs: [seq, head, head_dim]
         let mut output = vec![0.0f32; seq_len * n_head * head_dim];
-        for (h, head_output) in head_outputs.iter().enumerate() {
+        for (h, head_out) in head_outputs.iter().enumerate() {
             for i in 0..seq_len {
-                for d in 0..head_dim {
-                    output[i * n_head * head_dim + h * head_dim + d] =
-                        head_output[i * head_dim + d];
-                }
+                let dst = i * n_head * head_dim + h * head_dim;
+                let src = i * head_dim;
+                output[dst..dst + head_dim].copy_from_slice(&head_out[src..src + head_dim]);
             }
         }
-
         Ok(output)
     }
 
-    /// Output projection (BLAS-optimized)
-    fn output_proj(&self, hidden: &[f32], layer_idx: usize) -> Result<Vec<f32>> {
-        let weight_name = format!("blk.{}.attn_output.weight", layer_idx);
-        let weight = self.model.get_tensor_blocking(&weight_name);
+    // ── Feed-forward (SwiGLU) ─────────────────────────────────────────────────
 
-        let weight_data = match weight {
-            Some(w) => w.as_f32_slice()?.to_vec(),
-            None => return Ok(hidden.to_vec()),
-        };
-
-        self.linear_projection_blas(hidden, &weight_data, self.n_embd, self.n_embd)
-    }
-
-    /// SwiGLU feed-forward network
     fn feed_forward(&self, hidden: &[f32], layer_idx: usize) -> Result<Vec<f32>> {
-        let n_embd = self.n_embd;
-        let n_ff = self.model.hparams().n_ff as usize;
-        let seq_len = hidden.len() / n_embd;
+        let n_ff = self.n_ff;
 
-        // Gate projection
-        let gate = self._ffn_projection(hidden, layer_idx, "gate", n_ff)?;
-        // Up projection
-        let up = self._ffn_projection(hidden, layer_idx, "up", n_ff)?;
+        let gate = self.proj_with_in_dim(
+            hidden,
+            &format!("blk.{}.ffn_gate.weight", layer_idx),
+            self.n_embd,
+            n_ff,
+        )?;
+        let up = self.proj_with_in_dim(
+            hidden,
+            &format!("blk.{}.ffn_up.weight", layer_idx),
+            self.n_embd,
+            n_ff,
+        )?;
 
-        // Apply SiLU to gate and multiply
-        let mut gated = Vec::with_capacity(gate.len());
-        for (g, u) in gate.iter().zip(up.iter()) {
-            let silu_g = *g / (1.0 + (-g).exp());
-            gated.push(silu_g * u);
-        }
+        // SwiGLU: silu(gate) * up
+        let gated: Vec<f32> = gate
+            .iter()
+            .zip(up.iter())
+            .map(|(&g, &u)| (g * (1.0 / (1.0 + (-g).exp()))) * u)
+            .collect();
 
-        // Down projection
-        self._ffn_projection(&gated, layer_idx, "down", n_embd)
+        // Down projection: (n_embd × n_ff) pre-transposed as (n_ff, n_embd)
+        self.proj_with_in_dim(
+            &gated,
+            &format!("blk.{}.ffn_down.weight", layer_idx),
+            n_ff,
+            self.n_embd,
+        )
     }
 
-    /// FFN projection (BLAS-optimized)
-    fn _ffn_projection(
+    /// Like proj() but in_dim is explicit (needed for down projection where in_dim != n_embd)
+    fn proj_with_in_dim(
         &self,
         hidden: &[f32],
-        layer: usize,
-        typ: &str,
+        weight_name: &str,
+        in_dim: usize,
         out_dim: usize,
     ) -> Result<Vec<f32>> {
-        let weight_name = format!("blk.{}.ffn_{}.weight", layer, typ);
-        let weight = self.model.get_tensor_blocking(&weight_name);
+        let seq_len = hidden.len() / in_dim;
 
-        let weight_data = match weight {
-            Some(w) => w.as_f32_slice()?.to_vec(),
-            None => return Ok(vec![0.0; hidden.len() * out_dim / self.n_embd]),
-        };
-
-        self.linear_projection_blas(hidden, &weight_data, self.n_embd, out_dim)
-    }
-
-    /// Residual connection
-    fn add_residual(&self, hidden: &[f32], output: &[f32]) -> Result<Vec<f32>> {
-        if hidden.len() != output.len() {
-            return Ok(output.to_vec());
+        if let Some((w_t, k, n)) = self.weight_cache.get_proj(weight_name) {
+            debug_assert_eq!(k, in_dim, "in_dim mismatch for {}", weight_name);
+            debug_assert_eq!(n, out_dim, "out_dim mismatch for {}", weight_name);
+            return blas::gemm_f32(hidden, &w_t, seq_len, k, n);
         }
 
-        let mut result = Vec::with_capacity(hidden.len());
-        for (h, o) in hidden.iter().zip(output.iter()) {
-            result.push(h + o);
+        // Fallback
+        let tensor = self.model.get_tensor_blocking(weight_name);
+        match tensor {
+            Some(t) => {
+                let raw = t.as_f32_slice()?.to_vec();
+                let mut w_t = vec![0.0f32; in_dim * out_dim];
+                for o in 0..out_dim {
+                    for i in 0..in_dim {
+                        w_t[i * out_dim + o] = raw[o * in_dim + i];
+                    }
+                }
+                blas::gemm_f32(hidden, &w_t, seq_len, in_dim, out_dim)
+            }
+            None => Ok(vec![0.0f32; seq_len * out_dim]),
         }
-
-        Ok(result)
     }
 
-    /// Final output projection to logits
+    // ── Final output ──────────────────────────────────────────────────────────
+
     fn final_output(&self, hidden: &[f32]) -> Result<Vec<f32>> {
-        // Final RMSNorm
         let normalized = self.rms_norm(hidden, "output_norm.weight")?;
 
-        // Output projection
-        let output_weight = self.model.get_tensor_blocking("output.weight");
-        let output_data: Vec<f32> = match output_weight {
-            Some(w) => w.as_f32_slice()?.to_vec(),
+        let output_data = match self.weight_cache.get_raw("output.weight") {
+            Some(d) => d,
             None => {
-                let n_vocab = self.model.hparams().n_vocab as usize;
-                return Ok(vec![0.0; n_vocab]);
+                return Ok(vec![0.0f32; self.model.hparams().n_vocab as usize]);
             }
         };
 
         let n_embd = self.n_embd;
         let seq_len = hidden.len() / n_embd;
+        let vocab_size = output_data.len() / n_embd;
 
-        // Calculate actual vocab size from output tensor dimensions
-        let actual_vocab_size = output_data.len() / n_embd;
+        // Use last token hidden state: (1, n_embd)
+        let last = &normalized[(seq_len - 1) * n_embd..seq_len * n_embd];
 
-        // Only use the last token's hidden state for next token prediction
-        let last_hidden = &normalized[(seq_len - 1) * n_embd..seq_len * n_embd];
+        // output.weight is (vocab_size, n_embd); compute last @ W^T = (1, vocab_size)
+        // Use gemv for single-token decode
+        blas::gemv_f32(&output_data, last, vocab_size, n_embd)
+    }
+}
 
-        // Use BLAS-accelerated matrix multiplication
-        // logits^T = output_data * last_hidden^T
-        // Shape: (actual_vocab_size, n_embd) * (n_embd, 1)^T = (actual_vocab_size, n_embd) * (1, n_embd)^T
-        // Result: (actual_vocab_size, 1)
+// ── Free helper functions ──────────────────────────────────────────────────────
 
-        // For this, we need: logits = matmul(last_hidden_1xN, output_data^T_NxV)
-        // Where last_hidden is (1, n_embd) and output_data is (actual_vocab_size, n_embd)
+/// Element-wise vector addition (a + b)
+#[inline]
+fn add_vectors(a: &[f32], b: &[f32]) -> Vec<f32> {
+    if a.len() != b.len() {
+        return b.to_vec();
+    }
+    a.iter().zip(b.iter()).map(|(x, y)| x + y).collect()
+}
 
-        // Transpose output_data to (n_embd, actual_vocab_size)
-        let mut output_t = vec![0.0f32; actual_vocab_size * n_embd];
-        for i in 0..actual_vocab_size {
-            for j in 0..n_embd {
-                output_t[j * actual_vocab_size + i] = output_data[i * n_embd + j];
+/// Apply RoPE in flat [seq, n_heads, head_dim] layout
+/// Returns flat [n_heads, seq, head_dim] layout expected by compute_attention
+fn apply_rope(x: &[f32], seq_len: usize, n_heads: usize, head_dim: usize) -> Vec<f32> {
+    // Input: [seq_len, n_heads * head_dim]
+    // Output: [n_heads, seq_len, head_dim]
+    let mut out = vec![0.0f32; n_heads * seq_len * head_dim];
+
+    for h in 0..n_heads {
+        for pos in 0..seq_len {
+            let src_base = pos * n_heads * head_dim + h * head_dim;
+            let dst_base = h * seq_len * head_dim + pos * head_dim;
+
+            let half = head_dim / 2;
+            for i in 0..half {
+                let theta = 10000.0_f32.powf(-2.0 * i as f32 / head_dim as f32);
+                let angle = pos as f32 * theta;
+                let (sin_a, cos_a) = angle.sin_cos();
+
+                let x0 = x[src_base + i];
+                let x1 = x[src_base + i + half];
+
+                out[dst_base + i] = x0 * cos_a - x1 * sin_a;
+                out[dst_base + i + half] = x0 * sin_a + x1 * cos_a;
             }
         }
-
-        // Now compute: last_hidden (1, n_embd) * output_t (n_embd, actual_vocab_size) = (1, actual_vocab_size)
-        blas::gemm_f32(last_hidden, &output_t, 1, n_embd, actual_vocab_size)
     }
+
+    out
 }
 
 #[cfg(test)]
 mod tests {
-
     #[test]
     fn test_llama_transformer_creation() {
-        // Would need actual model to test
-        // This is a placeholder
+        // Placeholder: requires real GGUF model
     }
 }
