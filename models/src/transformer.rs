@@ -10,6 +10,7 @@
 use crate::context::KVCache;
 use crate::loader::Model;
 use barq_core::error::{Error, Result};
+use rayon::prelude::*;
 use std::sync::Arc;
 
 /// LLaMA transformer forward pass
@@ -477,14 +478,17 @@ impl LlamaTransformer {
         // Only use the last token's hidden state for next token prediction
         let last_hidden = &normalized[(seq_len - 1) * n_embd..seq_len * n_embd];
 
-        let mut logits = vec![0.0f32; actual_vocab_size];
-        for i in 0..actual_vocab_size {
-            let mut sum = 0.0;
-            for j in 0..n_embd {
-                sum += last_hidden[j] * output_data[i * n_embd + j];
-            }
-            logits[i] = sum;
-        }
+        // Parallelize computation across vocab
+        let logits: Vec<f32> = (0..actual_vocab_size)
+            .into_par_iter()
+            .map(|i| {
+                let mut sum = 0.0;
+                for j in 0..n_embd {
+                    sum += last_hidden[j] * output_data[i * n_embd + j];
+                }
+                sum
+            })
+            .collect();
 
         Ok(logits)
     }
