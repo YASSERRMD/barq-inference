@@ -13,6 +13,7 @@ use barq_core::blas;
 use barq_core::error::{Error, Result};
 use rayon::prelude::*;
 use std::sync::Arc;
+use std::time::Instant;
 
 /// LLaMA transformer forward pass
 pub struct LlamaTransformer {
@@ -48,18 +49,73 @@ impl LlamaTransformer {
 
     /// Forward pass through all transformer layers
     pub fn forward(&self, tokens: &[i32], kv_cache: &mut KVCache) -> Result<Vec<f32>> {
+        let total_start = Instant::now();
+
         // Get embedding matrix
+        let emb_start = Instant::now();
         let embeddings = self.get_embeddings(tokens)?;
+        let emb_time = emb_start.elapsed();
 
         // Apply transformer layers
         let mut hidden = embeddings;
+        let mut total_layer_time = 0.0;
+        let mut total_attn_time = 0.0;
+        let mut total_ffn_time = 0.0;
 
         for layer_idx in 0..self.n_layer {
-            hidden = self.forward_layer(layer_idx, &hidden, tokens.len(), kv_cache)?;
+            let layer_start = Instant::now();
+            let (hidden_result, attn_time, ffn_time) =
+                self.forward_layer_timed(layer_idx, &hidden, tokens.len(), kv_cache)?;
+            hidden = hidden_result;
+            let layer_time = layer_start.elapsed();
+
+            total_layer_time += layer_time.as_secs_f64();
+            total_attn_time += attn_time;
+            total_ffn_time += ffn_time;
         }
 
         // Apply final RMSNorm and output projection
-        self.final_output(&hidden)
+        let out_start = Instant::now();
+        let output = self.final_output(&hidden)?;
+        let out_time = out_start.elapsed();
+
+        let total_time = total_start.elapsed();
+
+        // Print profiling info
+        eprintln!("\n=== PROFILING INFO ===");
+        eprintln!("Total forward pass: {:.3}s", total_time.as_secs_f64());
+        eprintln!(
+            "  Embeddings: {:.3}s ({:.1}%)",
+            emb_time.as_secs_f64(),
+            emb_time.as_secs_f64() / total_time.as_secs_f64() * 100.0
+        );
+        eprintln!(
+            "  Transformer layers: {:.3}s ({:.1}%)",
+            total_layer_time,
+            total_layer_time / total_time.as_secs_f64() * 100.0
+        );
+        eprintln!(
+            "    Attention: {:.3}s ({:.1}%)",
+            total_attn_time,
+            total_attn_time / total_time.as_secs_f64() * 100.0
+        );
+        eprintln!(
+            "    FFN: {:.3}s ({:.1}%)",
+            total_ffn_time,
+            total_ffn_time / total_time.as_secs_f64() * 100.0
+        );
+        eprintln!(
+            "  Output projection: {:.3}s ({:.1}%)",
+            out_time.as_secs_f64(),
+            out_time.as_secs_f64() / total_time.as_secs_f64() * 100.0
+        );
+        eprintln!(
+            "  Per-layer average: {:.3}s",
+            total_layer_time / self.n_layer as f64
+        );
+        eprintln!("====================\n");
+
+        Ok(output)
     }
 
     /// Get token embeddings
@@ -114,6 +170,39 @@ impl LlamaTransformer {
         residual = self.add_residual(&residual, &ffn_out)?;
 
         Ok(residual)
+    }
+
+    /// Forward pass through a single transformer layer (with timing)
+    fn forward_layer_timed(
+        &self,
+        layer_idx: usize,
+        hidden: &[f32],
+        seq_len: usize,
+        kv_cache: &mut KVCache,
+    ) -> Result<(Vec<f32>, f64, f64)> {
+        // Pre-attention RMSNorm
+        let normalized = self.rms_norm(hidden, &format!("blk.{}.attn_norm.weight", layer_idx))?;
+
+        // Self-attention (timed)
+        let attn_start = Instant::now();
+        let attn_out = self.self_attention(&normalized, layer_idx, seq_len, kv_cache)?;
+        let attn_time = attn_start.elapsed().as_secs_f64();
+
+        // Residual connection
+        let mut residual = self.add_residual(hidden, &attn_out)?;
+
+        // Post-attention RMSNorm
+        let normalized = self.rms_norm(&residual, &format!("blk.{}.ffn_norm.weight", layer_idx))?;
+
+        // Feed-forward network (timed)
+        let ffn_start = Instant::now();
+        let ffn_out = self.feed_forward(&normalized, layer_idx)?;
+        let ffn_time = ffn_start.elapsed().as_secs_f64();
+
+        // Second residual connection
+        residual = self.add_residual(&residual, &ffn_out)?;
+
+        Ok((residual, attn_time, ffn_time))
     }
 
     /// RMSNorm layer
@@ -182,7 +271,38 @@ impl LlamaTransformer {
         self.output_proj(&attn_out, layer_idx)
     }
 
-    /// Project to Q, K, or V
+    /// Optimized linear projection using BLAS
+    fn linear_projection_blas(
+        &self,
+        hidden: &[f32],
+        weight_data: &[f32],
+        n_embd: usize,
+        out_dim: usize,
+    ) -> Result<Vec<f32>> {
+        let seq_len = hidden.len() / n_embd;
+
+        // Ensure hidden length is a multiple of n_embd
+        let actual_len = seq_len * n_embd;
+        let hidden_trunc = if actual_len < hidden.len() {
+            &hidden[..actual_len]
+        } else {
+            hidden
+        };
+
+        // Transpose weight from (out_dim, n_embd) to (n_embd, out_dim)
+        // This allows us to compute: hidden (seq_len, n_embd) * weight^T (n_embd, out_dim)
+        let mut weight_t = vec![0.0f32; out_dim * n_embd];
+        for i in 0..out_dim {
+            for j in 0..n_embd {
+                weight_t[j * out_dim + i] = weight_data[i * n_embd + j];
+            }
+        }
+
+        // Compute output = hidden * weight_t
+        blas::gemm_f32(hidden_trunc, &weight_t, seq_len, n_embd, out_dim)
+    }
+
+    /// Project to Q, K, or V (BLAS-optimized)
     fn project_qkv(
         &self,
         hidden: &[f32],
@@ -195,25 +315,14 @@ impl LlamaTransformer {
 
         let weight_data = match weight {
             Some(w) => w.as_f32_slice()?.to_vec(),
-            None => return Ok(vec![0.0; hidden.len() * out_dim / self.n_embd]),
+            None => {
+                let n_embd = self.n_embd;
+                let seq_len = hidden.len() / n_embd;
+                return Ok(vec![0.0; seq_len * out_dim]);
+            }
         };
 
-        let n_embd = self.n_embd;
-        let seq_len = hidden.len() / n_embd;
-        let mut output = vec![0.0; seq_len * out_dim];
-
-        // Matrix multiplication: [seq_len, n_embd] * [out_dim, n_embd]^T
-        for i in 0..seq_len {
-            for j in 0..out_dim {
-                let mut sum = 0.0;
-                for k in 0..n_embd {
-                    sum += hidden[i * n_embd + k] * weight_data[j * n_embd + k];
-                }
-                output[i * out_dim + j] = sum;
-            }
-        }
-
-        Ok(output)
+        self.linear_projection_blas(hidden, &weight_data, self.n_embd, out_dim)
     }
 
     /// Reshape to multi-head format
@@ -292,7 +401,7 @@ impl LlamaTransformer {
         Ok(output)
     }
 
-    /// Compute attention output
+    /// Compute attention output (parallelized with rayon)
     fn compute_attention(
         &self,
         q: &[Vec<f32>],
@@ -303,53 +412,80 @@ impl LlamaTransformer {
         head_dim: usize,
         seq_len: usize,
     ) -> Result<Vec<f32>> {
-        let mut output = vec![0.0f32; seq_len * n_head * head_dim];
+        use rayon::prelude::*;
 
-        // Handle multi-query attention (n_head_kv may be smaller than n_head)
-        for h in 0..n_head {
-            let kv_head_idx = h * n_head_kv / n_head;
-            let q_head = &q[h];
-            let k_head = &k[kv_head_idx];
-            let v_head = &v[kv_head_idx];
+        // Compute each head independently and collect results
+        let head_outputs: Vec<Vec<f32>> = (0..n_head)
+            .into_par_iter()
+            .map(|h| {
+                let kv_head_idx = h * n_head_kv / n_head;
+                let q_head = &q[h];
+                let k_head = &k[kv_head_idx];
+                let v_head = &v[kv_head_idx];
 
-            // Compute attention scores for each position
-            for i in 0..seq_len {
-                let mut attn_weights = Vec::with_capacity(seq_len);
+                // Check if data is valid length
+                let q_valid = q_head.len() >= seq_len * head_dim;
+                let k_valid = k_head.len() >= seq_len * head_dim;
+                let v_valid = v_head.len() >= seq_len * head_dim;
 
-                for j in 0..seq_len {
-                    let mut score = 0.0;
-                    for d in 0..head_dim {
-                        let q_idx = i * head_dim + d;
-                        let k_idx = j * head_dim + d;
-                        if q_idx < q_head.len() && k_idx < k_head.len() {
-                            score += q_head[q_idx] * k_head[k_idx];
-                        }
-                    }
-                    // Scale by sqrt(d_k)
-                    attn_weights.push(score / (head_dim as f32).sqrt());
+                if !q_valid || !k_valid || !v_valid {
+                    // Return zeros if data is invalid
+                    return vec![0.0f32; seq_len * head_dim];
                 }
 
-                // Softmax
-                let max_weight = attn_weights
-                    .iter()
-                    .cloned()
-                    .fold(f32::NEG_INFINITY, f32::max);
-                let exp_sum: f32 = attn_weights.iter().map(|&w| (w - max_weight).exp()).sum();
-                let probs: Vec<f32> = attn_weights
-                    .iter()
-                    .map(|&w| ((w - max_weight).exp()) / exp_sum)
-                    .collect();
+                let mut head_output = vec![0.0f32; seq_len * head_dim];
+                let scale = (head_dim as f32).sqrt();
 
-                // Weighted sum of values
-                for d in 0..head_dim {
-                    let mut sum = 0.0;
+                // Compute attention scores and output for each position
+                for i in 0..seq_len {
+                    let mut attn_weights = Vec::with_capacity(seq_len);
+
+                    // Compute scores for position i against all positions j
                     for j in 0..seq_len {
-                        let v_idx = j * head_dim + d;
-                        if v_idx < v_head.len() {
-                            sum += probs[j] * v_head[v_idx];
+                        let mut score = 0.0;
+                        for d in 0..head_dim {
+                            let q_idx = i * head_dim + d;
+                            let k_idx = j * head_dim + d;
+                            score += unsafe {
+                                q_head.get_unchecked(q_idx) * k_head.get_unchecked(k_idx)
+                            };
                         }
+                        attn_weights.push(score / scale);
                     }
-                    output[i * n_head * head_dim + h * head_dim + d] = sum;
+
+                    // Softmax
+                    let max_weight = attn_weights
+                        .iter()
+                        .cloned()
+                        .fold(f32::NEG_INFINITY, f32::max);
+                    let exp_sum: f32 = attn_weights.iter().map(|&w| (w - max_weight).exp()).sum();
+                    let probs: Vec<f32> = attn_weights
+                        .iter()
+                        .map(|&w| ((w - max_weight).exp()) / exp_sum)
+                        .collect();
+
+                    // Weighted sum of values
+                    for d in 0..head_dim {
+                        let mut sum = 0.0;
+                        for j in 0..seq_len {
+                            let v_idx = j * head_dim + d;
+                            sum += unsafe { probs.get_unchecked(j) * v_head.get_unchecked(v_idx) };
+                        }
+                        head_output[i * head_dim + d] = sum;
+                    }
+                }
+
+                head_output
+            })
+            .collect();
+
+        // Combine head outputs into final output
+        let mut output = vec![0.0f32; seq_len * n_head * head_dim];
+        for (h, head_output) in head_outputs.iter().enumerate() {
+            for i in 0..seq_len {
+                for d in 0..head_dim {
+                    output[i * n_head * head_dim + h * head_dim + d] =
+                        head_output[i * head_dim + d];
                 }
             }
         }
@@ -357,7 +493,7 @@ impl LlamaTransformer {
         Ok(output)
     }
 
-    /// Output projection
+    /// Output projection (BLAS-optimized)
     fn output_proj(&self, hidden: &[f32], layer_idx: usize) -> Result<Vec<f32>> {
         let weight_name = format!("blk.{}.attn_output.weight", layer_idx);
         let weight = self.model.get_tensor_blocking(&weight_name);
@@ -367,22 +503,7 @@ impl LlamaTransformer {
             None => return Ok(hidden.to_vec()),
         };
 
-        let n_embd = self.n_embd;
-        let seq_len = hidden.len() / n_embd;
-        let mut output = vec![0.0; hidden.len()];
-
-        // Simplified matrix multiplication
-        for i in 0..seq_len {
-            for j in 0..n_embd {
-                let mut sum = 0.0;
-                for k in 0..n_embd {
-                    sum += hidden[i * n_embd + k] * weight_data[j * n_embd + k];
-                }
-                output[i * n_embd + j] = sum;
-            }
-        }
-
-        Ok(output)
+        self.linear_projection_blas(hidden, &weight_data, self.n_embd, self.n_embd)
     }
 
     /// SwiGLU feed-forward network
@@ -407,7 +528,7 @@ impl LlamaTransformer {
         self._ffn_projection(&gated, layer_idx, "down", n_embd)
     }
 
-    /// FFN projection
+    /// FFN projection (BLAS-optimized)
     fn _ffn_projection(
         &self,
         hidden: &[f32],
@@ -423,22 +544,7 @@ impl LlamaTransformer {
             None => return Ok(vec![0.0; hidden.len() * out_dim / self.n_embd]),
         };
 
-        let n_embd = self.n_embd;
-        let seq_len = hidden.len() / n_embd;
-        let mut output = vec![0.0; seq_len * out_dim];
-
-        // Matrix multiplication: [seq_len, n_embd] * [out_dim, n_embd]^T
-        for i in 0..seq_len {
-            for j in 0..out_dim {
-                let mut sum = 0.0;
-                for k in 0..n_embd {
-                    sum += hidden[i * n_embd + k] * weight_data[j * n_embd + k];
-                }
-                output[i * out_dim + j] = sum;
-            }
-        }
-
-        Ok(output)
+        self.linear_projection_blas(hidden, &weight_data, self.n_embd, out_dim)
     }
 
     /// Residual connection

@@ -43,6 +43,7 @@ pub mod gemm;
 pub mod gguf;
 pub mod grammar;
 pub mod memory;
+pub mod metal_blas;
 pub mod normalization;
 pub mod ops;
 pub mod ops_ref;

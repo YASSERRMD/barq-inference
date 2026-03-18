@@ -1,10 +1,42 @@
 //! Optimized matrix operations
 //!
-//! Provides parallelized matrix multiplication using rayon for CPU acceleration.
-//! Future versions will add BLAS support for additional performance.
+//! Provides GPU-accelerated matrix multiplication using Metal (macOS) and
+//! CPU parallelization using rayon as fallback.
 
 use crate::error::{Error, Result};
+use crate::metal_blas::MetalBlas;
 use rayon::prelude::*;
+use std::sync::Arc;
+use std::sync::OnceLock;
+
+// Global Metal BLAS instance (lazy initialization)
+static METAL_BLAS: OnceLock<Option<Arc<MetalBlas>>> = OnceLock::new();
+
+/// Get or initialize Metal BLAS instance
+fn get_metal_blas() -> Option<&'static Arc<MetalBlas>> {
+    METAL_BLAS
+        .get_or_init(|| {
+            #[cfg(feature = "metal")]
+            {
+                match MetalBlas::new() {
+                    Ok(blas) => {
+                        eprintln!("Metal BLAS initialized successfully");
+                        Some(Arc::new(blas))
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to initialize Metal BLAS: {}", e);
+                        eprintln!("Falling back to CPU parallelization");
+                        None
+                    }
+                }
+            }
+            #[cfg(not(feature = "metal"))]
+            {
+                None
+            }
+        })
+        .as_ref()
+}
 
 /// Matrix multiplication: C = A * B
 ///
@@ -37,7 +69,17 @@ pub fn gemm_f32(a: &[f32], b: &[f32], m: usize, k: usize, n: usize) -> Result<Ve
         )));
     }
 
-    // Parallel matrix multiplication
+    // Try Metal GPU acceleration first
+    if let Some(metal_blas) = get_metal_blas() {
+        match metal_blas.gemm(a, b, m, k, n) {
+            Ok(result) => return Ok(result),
+            Err(e) => {
+                eprintln!("Metal GEMM failed: {}, falling back to CPU", e);
+            }
+        }
+    }
+
+    // Fallback to CPU parallelization
     let mut c = vec![0.0f32; m * n];
 
     // Parallelize over rows of A/C
