@@ -12,29 +12,26 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 #[cfg(feature = "metal")]
-use metal::{
-    objc::{id, rc::autoreleasepool},
-    *,
-};
+use metal::*;
 
 /// Metal backend
 pub struct MetalBackend {
     /// Metal device
     #[cfg(feature = "metal")]
-    device: id<MTLDevice>,
+    device: metal::Device,
     /// Command queue
     #[cfg(feature = "metal")]
-    command_queue: id<MTLCommandQueue>,
+    command_queue: metal::CommandQueue,
     /// Device ID
     device_id: usize,
     /// Device properties
     props: MetalDeviceProps,
     /// Loaded shader libraries
     #[cfg(feature = "metal")]
-    shader_libraries: HashMap<String, id<MTLLibrary>>,
+    shader_libraries: HashMap<String, metal::Library>,
     /// Compute pipelines
     #[cfg(feature = "metal")]
-    pipelines: HashMap<String, id<MTLComputePipelineState>>,
+    pipelines: HashMap<String, metal::ComputePipelineState>,
 }
 
 /// Metal device properties
@@ -63,50 +60,49 @@ impl MetalBackend {
     pub fn new(device_id: usize) -> Result<Self> {
         #[cfg(feature = "metal")]
         {
-            autoreleasepool(|| {
-                // Get all devices
-                let devices = Device::all();
-                let devices_vec: Vec<id<MTLDevice>> = devices.into_iter().collect();
+            // Get all devices
+            let devices = Device::all();
+            let devices_vec: Vec<metal::Device> = devices.into_iter().collect();
 
-                if device_id >= devices_vec.len() {
-                    return Err(Error::backend(format!(
-                        "Device ID {} out of range ({} devices available)",
-                        device_id,
-                        devices_vec.len()
-                    )));
-                }
-
-                let device = devices_vec[device_id];
-
-                // Create command queue
-                let command_queue = device.new_command_queue();
-
-                // Get device properties
-                let props = MetalDeviceProps {
-                    name: device.name().to_string(),
-                    num_gpus: devices_vec.len(),
-                    max_threads_per_threadgroup: device.max_threads_per_threadgroup(),
-                    threadgroup_memory_size: if device.has_unified_memory() {
-                        // M1/M2 typically have 32KB-64KB threadgroup memory
-                        65536 // Conservative estimate
-                    } else {
-                        32768
-                    },
-                    has_unified_memory: device.has_unified_memory(),
-                    supports_simd_reduction: device.supports_family(GPUFamily::Apple7),
-                    supports_simd_matrix: device
-                        .supports_feature(ShaderType::Compute, MTLFeatureSet::iOS_GPUFamily5_v1),
-                    max_buffer_length: device.max_buffer_length(),
-                };
-
-                Ok(Self {
-                    device,
-                    command_queue,
+            if device_id >= devices_vec.len() {
+                return Err(Error::backend(format!(
+                    "Device ID {} out of range ({} devices available)",
                     device_id,
-                    props,
-                    shader_libraries: HashMap::new(),
-                    pipelines: HashMap::new(),
-                })
+                    devices_vec.len()
+                )));
+            }
+
+            let device = &devices_vec[device_id];
+
+            // Create command queue
+            let command_queue = device.new_command_queue();
+
+            // Get device properties
+            let props = MetalDeviceProps {
+                name: device.name().to_string(),
+                num_gpus: devices_vec.len(),
+                max_threads_per_threadgroup: device.max_threads_per_threadgroup().width as usize,
+                threadgroup_memory_size: if device.has_unified_memory() {
+                    // M1/M2 typically have 32KB-64KB threadgroup memory
+                    65536 // Conservative estimate
+                } else {
+                    32768
+                },
+                has_unified_memory: device.has_unified_memory(),
+                supports_simd_reduction: device.supports_family(metal::MTLGPUFamily::Apple7),
+                supports_simd_matrix: true, // Most Apple GPUs support SIMD matrix ops
+                max_buffer_length: device.max_buffer_length() as usize,
+            };
+
+            Ok(Self {
+                device: device.clone(),
+                command_queue,
+                device_id,
+                props,
+                #[cfg(feature = "metal")]
+                shader_libraries: HashMap::new(),
+                #[cfg(feature = "metal")]
+                pipelines: HashMap::new(),
             })
         }
 
@@ -141,7 +137,7 @@ impl MetalBackend {
     /// Create command buffer
     #[cfg(feature = "metal")]
     pub fn new_command_buffer(&self) -> Result<MetalCommandBuffer> {
-        let cmd_buffer = self.command_queue.new_command_buffer();
+        let cmd_buffer = self.command_queue.new_command_buffer().to_owned();
         Ok(MetalCommandBuffer {
             buffer: cmd_buffer,
             device_id: self.device_id,
@@ -151,16 +147,14 @@ impl MetalBackend {
     /// Load shader library from source
     #[cfg(feature = "metal")]
     pub fn load_shader_library(&mut self, name: &str, source: &str) -> Result<()> {
-        autoreleasepool(|| {
-            let options = CompileOptions::new();
-            let library = self
-                .device
-                .new_library_with_source(source, &options)
-                .map_err(|e| Error::backend(format!("Failed to compile shader: {:?}", e)))?;
+        let options = metal::CompileOptions::new();
+        let library = self
+            .device
+            .new_library_with_source(source, &options)
+            .map_err(|e| Error::backend(format!("Failed to compile shader: {:?}", e)))?;
 
-            self.shader_libraries.insert(name.to_string(), library);
-            Ok(())
-        })
+        self.shader_libraries.insert(name.to_string(), library);
+        Ok(())
     }
 
     /// Create compute pipeline
@@ -171,29 +165,27 @@ impl MetalBackend {
         function_name: &str,
         library_name: &str,
     ) -> Result<()> {
-        autoreleasepool(|| {
-            let library = self
-                .shader_libraries
-                .get(library_name)
-                .ok_or_else(|| Error::backend(format!("Library {} not found", library_name)))?;
+        let library = self
+            .shader_libraries
+            .get(library_name)
+            .ok_or_else(|| Error::backend(format!("Library {} not found", library_name)))?;
 
-            let function = library
-                .get_function(function_name, None)
-                .ok_or_else(|| Error::backend(format!("Function {} not found", function_name)))?;
+        let function = library
+            .get_function(function_name, None)
+            .map_err(|e| Error::backend(format!("Failed to get function: {:?}", e)))?;
 
-            let pipeline = self
-                .device
-                .new_compute_pipeline_state_with_function(function)
-                .map_err(|e| Error::backend(format!("Failed to create pipeline: {:?}", e)))?;
+        let pipeline = self
+            .device
+            .new_compute_pipeline_state_with_function(&function)
+            .map_err(|e| Error::backend(format!("Failed to create pipeline: {:?}", e)))?;
 
-            self.pipelines.insert(name.to_string(), pipeline);
-            Ok(())
-        })
+        self.pipelines.insert(name.to_string(), pipeline);
+        Ok(())
     }
 
     /// Get pipeline
     #[cfg(feature = "metal")]
-    pub fn pipeline(&self, name: &str) -> Option<&id<MTLComputePipelineState>> {
+    pub fn pipeline(&self, name: &str) -> Option<&metal::ComputePipelineState> {
         self.pipelines.get(name)
     }
 
@@ -255,7 +247,7 @@ impl MetalBackend {
 #[cfg(feature = "metal")]
 pub struct MetalCommandBuffer {
     /// Command buffer
-    pub buffer: id<MTLCommandBuffer>,
+    pub buffer: metal::CommandBuffer,
     /// Device ID
     device_id: usize,
 }
@@ -277,7 +269,7 @@ impl MetalCommandBuffer {
 #[cfg(feature = "metal")]
 pub struct MetalBuffer {
     /// Metal buffer
-    pub buffer: id<MTLBuffer>,
+    pub buffer: metal::Buffer,
     /// Size in bytes
     pub size: usize,
 }
@@ -285,10 +277,8 @@ pub struct MetalBuffer {
 #[cfg(feature = "metal")]
 impl MetalBuffer {
     /// Allocate new Metal buffer
-    pub fn new(device: &id<MTLDevice>, size: usize) -> Result<Self> {
-        let buffer = device
-            .new_buffer(size, MTLResourceOptions::StorageModeShared)
-            .ok_or_else(|| Error::backend("Failed to allocate Metal buffer".to_string()))?;
+    pub fn new(device: &metal::Device, size: usize) -> Result<Self> {
+        let buffer = device.new_buffer(size as u64, metal::MTLResourceOptions::StorageModeShared);
 
         Ok(Self { buffer, size })
     }
@@ -311,7 +301,7 @@ impl MetalBuffer {
         #[cfg(feature = "metal")]
         self.buffer.did_modify_range(metal::NSRange {
             location: 0,
-            length: bytes.len(),
+            length: bytes.len() as u64,
         });
 
         Ok(())
@@ -328,7 +318,7 @@ impl MetalBuffer {
 
         let contents = self.buffer.contents();
         unsafe {
-            std::ptr::copy_nonoverlapping(contents as *const u8, bytes.as_ptr(), bytes.len());
+            std::ptr::copy_nonoverlapping(contents as *const u8, bytes.as_mut_ptr(), bytes.len());
         }
 
         Ok(())
@@ -344,20 +334,20 @@ impl MetalBuffer {
 #[cfg(feature = "metal")]
 pub struct MetalComputeEncoder {
     /// Compute command encoder
-    pub encoder: id<MTLComputeCommandEncoder>,
+    pub encoder: metal::ComputeCommandEncoder,
 }
 
 #[cfg(feature = "metal")]
 impl MetalComputeEncoder {
     /// Set pipeline
-    pub fn set_pipeline(&self, pipeline: &id<MTLComputePipelineState>) {
+    pub fn set_pipeline(&self, pipeline: &metal::ComputePipelineState) {
         self.encoder.set_compute_pipeline_state(pipeline);
     }
 
     /// Set buffer
-    pub fn set_buffer(&self, index: usize, buffer: &id<MTLBuffer>, offset: usize) {
+    pub fn set_buffer(&self, index: usize, buffer: &metal::Buffer, offset: usize) {
         self.encoder
-            .set_buffer(index as u64, Some(*buffer), offset as u64);
+            .set_buffer(index as u64, Some(buffer), offset as u64);
     }
 
     /// Dispatch threadgroups
