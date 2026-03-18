@@ -37,6 +37,9 @@ rand_chacha = "0.3"
 byteorder = "1.5"
 num_cpus = "1.16"
 
+# BLAS acceleration (optional)
+blas-src = { version = "0.9", optional = true, default-features = false, features = ["accelerate"] }
+
 # GPU dependencies (optional)
 cudarc = { version = "0.12", optional = true }
 metal = { version = "0.28", optional = true }
@@ -46,7 +49,8 @@ criterion = "0.5"
 proptest = "1.5"
 
 [features]
-default = ["simd"]
+default = ["simd", "blas"]
 simd = []
+blas = ["dep:blas-src"]  # Uses Accelerate on macOS, OpenBLAS on Linux/Windows
 cuda = ["dep:cudarc"]
 metal = ["dep:metal"]
