@@ -13,6 +13,7 @@ use barq_core::blas;
 use barq_core::error::{Error, Result};
 use rayon::prelude::*;
 use std::sync::Arc;
+use std::time::Instant;
 
 /// LLaMA transformer forward pass
 pub struct LlamaTransformer {
@@ -48,18 +49,73 @@ impl LlamaTransformer {
 
     /// Forward pass through all transformer layers
     pub fn forward(&self, tokens: &[i32], kv_cache: &mut KVCache) -> Result<Vec<f32>> {
+        let total_start = Instant::now();
+
         // Get embedding matrix
+        let emb_start = Instant::now();
         let embeddings = self.get_embeddings(tokens)?;
+        let emb_time = emb_start.elapsed();
 
         // Apply transformer layers
         let mut hidden = embeddings;
+        let mut total_layer_time = 0.0;
+        let mut total_attn_time = 0.0;
+        let mut total_ffn_time = 0.0;
 
         for layer_idx in 0..self.n_layer {
-            hidden = self.forward_layer(layer_idx, &hidden, tokens.len(), kv_cache)?;
+            let layer_start = Instant::now();
+            let (hidden_result, attn_time, ffn_time) =
+                self.forward_layer_timed(layer_idx, &hidden, tokens.len(), kv_cache)?;
+            hidden = hidden_result;
+            let layer_time = layer_start.elapsed();
+
+            total_layer_time += layer_time.as_secs_f64();
+            total_attn_time += attn_time;
+            total_ffn_time += ffn_time;
         }
 
         // Apply final RMSNorm and output projection
-        self.final_output(&hidden)
+        let out_start = Instant::now();
+        let output = self.final_output(&hidden)?;
+        let out_time = out_start.elapsed();
+
+        let total_time = total_start.elapsed();
+
+        // Print profiling info
+        eprintln!("\n=== PROFILING INFO ===");
+        eprintln!("Total forward pass: {:.3}s", total_time.as_secs_f64());
+        eprintln!(
+            "  Embeddings: {:.3}s ({:.1}%)",
+            emb_time.as_secs_f64(),
+            emb_time.as_secs_f64() / total_time.as_secs_f64() * 100.0
+        );
+        eprintln!(
+            "  Transformer layers: {:.3}s ({:.1}%)",
+            total_layer_time,
+            total_layer_time / total_time.as_secs_f64() * 100.0
+        );
+        eprintln!(
+            "    Attention: {:.3}s ({:.1}%)",
+            total_attn_time,
+            total_attn_time / total_time.as_secs_f64() * 100.0
+        );
+        eprintln!(
+            "    FFN: {:.3}s ({:.1}%)",
+            total_ffn_time,
+            total_ffn_time / total_time.as_secs_f64() * 100.0
+        );
+        eprintln!(
+            "  Output projection: {:.3}s ({:.1}%)",
+            out_time.as_secs_f64(),
+            out_time.as_secs_f64() / total_time.as_secs_f64() * 100.0
+        );
+        eprintln!(
+            "  Per-layer average: {:.3}s",
+            total_layer_time / self.n_layer as f64
+        );
+        eprintln!("====================\n");
+
+        Ok(output)
     }
 
     /// Get token embeddings
@@ -114,6 +170,39 @@ impl LlamaTransformer {
         residual = self.add_residual(&residual, &ffn_out)?;
 
         Ok(residual)
+    }
+
+    /// Forward pass through a single transformer layer (with timing)
+    fn forward_layer_timed(
+        &self,
+        layer_idx: usize,
+        hidden: &[f32],
+        seq_len: usize,
+        kv_cache: &mut KVCache,
+    ) -> Result<(Vec<f32>, f64, f64)> {
+        // Pre-attention RMSNorm
+        let normalized = self.rms_norm(hidden, &format!("blk.{}.attn_norm.weight", layer_idx))?;
+
+        // Self-attention (timed)
+        let attn_start = Instant::now();
+        let attn_out = self.self_attention(&normalized, layer_idx, seq_len, kv_cache)?;
+        let attn_time = attn_start.elapsed().as_secs_f64();
+
+        // Residual connection
+        let mut residual = self.add_residual(hidden, &attn_out)?;
+
+        // Post-attention RMSNorm
+        let normalized = self.rms_norm(&residual, &format!("blk.{}.ffn_norm.weight", layer_idx))?;
+
+        // Feed-forward network (timed)
+        let ffn_start = Instant::now();
+        let ffn_out = self.feed_forward(&normalized, layer_idx)?;
+        let ffn_time = ffn_start.elapsed().as_secs_f64();
+
+        // Second residual connection
+        residual = self.add_residual(&residual, &ffn_out)?;
+
+        Ok((residual, attn_time, ffn_time))
     }
 
     /// RMSNorm layer

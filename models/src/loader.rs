@@ -103,7 +103,33 @@ impl Model {
                     GgufValue::Float32(f) => {
                         metadata_map.insert(key.clone(), f.to_string());
                     }
-                    _ => {}
+                    // Handle arrays - especially tokenizer tokens
+                    GgufValue::Array(arr) => {
+                        if key == "tokenizer.ggml.tokens" {
+                            // Convert token array to JSON for storage
+                            let tokens: Vec<String> = arr
+                                .iter()
+                                .filter_map(|v| {
+                                    if let GgufValue::String(s) = v {
+                                        Some(s.clone())
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .collect();
+                            if let Ok(json) = serde_json::to_string(&tokens) {
+                                metadata_map.insert(key.clone(), json);
+                            }
+                        } else {
+                            // For other arrays, store count
+                            metadata_map
+                                .insert(key.clone(), format!("[array; {} items]", arr.len()));
+                        }
+                    }
+                    _ => {
+                        // Store other types as string representation
+                        metadata_map.insert(key.clone(), format!("{:?}", value));
+                    }
                 }
             }
 

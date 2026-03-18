@@ -35,15 +35,38 @@ impl GgufTokenizer {
     }
 
     /// Load tokenizer from GGUF model metadata
-    pub fn from_gguf(tokens: &HashMap<String, String>) -> Self {
+    pub fn from_gguf(metadata: &HashMap<String, String>) -> Self {
         let vocab = Arc::new(Vocab::new(VocabType::SPM));
         let mut token_to_id = HashMap::new();
         let mut id_to_token = HashMap::new();
 
-        // Try to extract tokenizer information from GGUF
-        for (key, value) in tokens {
-            if key.starts_with("tokenizer.ggml.") {
-                // GGUF format tokens
+        // Try to load tokenizer tokens array (stored as JSON)
+        if let Some(tokens_json) = metadata.get("tokenizer.ggml.tokens") {
+            if let Ok(tokens_vec) = serde_json::from_str::<Vec<String>>(tokens_json) {
+                eprintln!(
+                    "Loading vocabulary with {} tokens from GGUF",
+                    tokens_vec.len()
+                );
+                // Build the token mappings
+                for (id, token) in tokens_vec.iter().enumerate() {
+                    let id_u32 = id as u32;
+                    id_to_token.insert(id_u32, token.clone());
+                    token_to_id.insert(token.clone(), id_u32);
+                }
+                eprintln!("Loaded {} tokens into vocabulary", id_to_token.len());
+                return Self {
+                    vocab,
+                    token_to_id,
+                    id_to_token,
+                };
+            } else {
+                eprintln!("Failed to parse tokenizer.ggml.tokens JSON");
+            }
+        }
+
+        // Fallback: Try old format (individual token entries)
+        for (key, value) in metadata {
+            if key.starts_with("tokenizer.ggml.token.") {
                 if let Some(id_str) = key.strip_prefix("tokenizer.ggml.token.") {
                     if let Ok(id) = id_str.parse::<u32>() {
                         id_to_token.insert(id, value.clone());
@@ -51,6 +74,11 @@ impl GgufTokenizer {
                     }
                 }
             }
+        }
+
+        if id_to_token.is_empty() {
+            eprintln!("Warning: No vocabulary loaded from GGUF metadata!");
+            eprintln!("Available keys: {:?}", metadata.keys().collect::<Vec<_>>());
         }
 
         Self {
@@ -86,27 +114,29 @@ impl GgufTokenizer {
 
     /// Decode token IDs back to text
     fn decode_tokens(&self, ids: &[u32]) -> String {
-        let mut pieces = Vec::new();
+        let mut bytes = Vec::new();
 
         for &id in ids {
             // Look up token in vocabulary
             if let Some(token) = self.id_to_token.get(&id) {
-                pieces.push(token.clone());
-            } else {
-                // Skip unknown tokens or use replacement
-                if id >= 2 {
-                    // Try to decode as byte for backward compatibility
-                    let byte = (id - 2) as u8;
-                    if byte.is_ascii() && !byte.is_ascii_control() {
-                        if let Ok(s) = std::str::from_utf8(&[byte]) {
-                            pieces.push(s.to_string());
-                        }
+                // Handle byte-level tokens like "<0x00>"
+                if token.starts_with("<0x") && token.ends_with('>') {
+                    // Parse hex byte value
+                    if let Ok(byte_val) = u8::from_str_radix(&token[3..token.len() - 1], 16) {
+                        bytes.push(byte_val);
                     }
+                } else if token == "<unk>" || token == "<s>" || token == "</s>" {
+                    // Skip special tokens
+                    continue;
+                } else {
+                    // Regular text token - add as bytes
+                    bytes.extend_from_slice(token.as_bytes());
                 }
             }
         }
 
-        pieces.concat()
+        // Convert bytes to UTF-8 string, replacing invalid sequences
+        String::from_utf8_lossy(&bytes).to_string()
     }
 }
 
