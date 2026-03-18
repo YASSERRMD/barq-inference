@@ -1,8 +1,11 @@
 //! Optimized matrix operations
 //!
-//! Provides GPU-accelerated matrix multiplication using Metal (macOS) and
-//! CPU parallelization using rayon as fallback.
+//! Provides hardware-accelerated matrix multiplication using:
+//! 1. Apple Accelerate framework (cBLAS) on macOS - PRIMARY
+//! 2. Metal GPU acceleration on Apple Silicon - FALLBACK 1
+//! 3. CPU parallelization using rayon - FALLBACK 2
 
+use crate::accelerate_blas;
 use crate::error::{Error, Result};
 use crate::metal_blas::MetalBlas;
 use rayon::prelude::*;
@@ -49,6 +52,11 @@ fn get_metal_blas() -> Option<&'static Arc<MetalBlas>> {
 ///
 /// # Returns
 /// Matrix C of shape (m, n) in row-major order
+///
+/// # Backend Priority
+/// 1. Apple Accelerate (cBLAS) on macOS - hardware-optimized SIMD
+/// 2. Metal GPU on Apple Silicon - GPU acceleration
+/// 3. Rayon CPU parallelization - multi-threaded fallback
 pub fn gemm_f32(a: &[f32], b: &[f32], m: usize, k: usize, n: usize) -> Result<Vec<f32>> {
     if a.len() != m * k {
         return Err(Error::tensor(format!(
@@ -69,17 +77,55 @@ pub fn gemm_f32(a: &[f32], b: &[f32], m: usize, k: usize, n: usize) -> Result<Ve
         )));
     }
 
-    // Try Metal GPU acceleration first
-    if let Some(metal_blas) = get_metal_blas() {
-        match metal_blas.gemm(a, b, m, k, n) {
-            Ok(result) => return Ok(result),
-            Err(e) => {
-                eprintln!("Metal GEMM failed: {}, falling back to CPU", e);
+    // Try Apple Accelerate (cBLAS) first - PRIMARY BACKEND on macOS
+    #[cfg(target_os = "macos")]
+    {
+        if accelerate_blas::is_available() {
+            match accelerate_blas::sgemm(a, b, m, k, n) {
+                Ok(result) => {
+                    // Only print on first few calls to avoid spam
+                    static FIRST_CALL: std::sync::Once = std::sync::Once::new();
+                    FIRST_CALL.call_once(|| {
+                        eprintln!("Using Apple Accelerate cBLAS for matrix multiplication");
+                    });
+                    return Ok(result);
+                }
+                Err(e) => {
+                    // Only print once
+                    static FIRST_FAIL: std::sync::Once = std::sync::Once::new();
+                    FIRST_FAIL.call_once(|| {
+                        eprintln!("Accelerate GEMM failed: {}, falling back to Metal", e);
+                    });
+                }
             }
         }
     }
 
-    // Fallback to CPU parallelization
+    // Try Metal GPU acceleration next
+    if let Some(metal_blas) = get_metal_blas() {
+        match metal_blas.gemm(a, b, m, k, n) {
+            Ok(result) => {
+                static FIRST_METAL: std::sync::Once = std::sync::Once::new();
+                FIRST_METAL.call_once(|| {
+                    eprintln!("Using Metal GPU for matrix multiplication");
+                });
+                return Ok(result);
+            }
+            Err(e) => {
+                static FIRST_METAL_FAIL: std::sync::Once = std::sync::Once::new();
+                FIRST_METAL_FAIL.call_once(|| {
+                    eprintln!("Metal GEMM failed: {}, falling back to CPU", e);
+                });
+            }
+        }
+    }
+
+    // Final fallback to CPU parallelization with rayon
+    static FIRST_CPU: std::sync::Once = std::sync::Once::new();
+    FIRST_CPU.call_once(|| {
+        eprintln!("Using CPU parallelization (rayon) for matrix multiplication");
+    });
+
     let mut c = vec![0.0f32; m * n];
 
     // Parallelize over rows of A/C
@@ -106,6 +152,10 @@ pub fn gemm_f32(a: &[f32], b: &[f32], m: usize, k: usize, n: usize) -> Result<Ve
 ///
 /// # Returns
 /// Vector y of length m
+///
+/// # Backend Priority
+/// 1. Apple Accelerate (cBLAS) on macOS - hardware-optimized SIMD
+/// 2. Rayon CPU parallelization - multi-threaded fallback
 pub fn gemv_f32(a: &[f32], x: &[f32], m: usize, n: usize) -> Result<Vec<f32>> {
     if a.len() != m * n {
         return Err(Error::tensor(format!(
@@ -124,6 +174,20 @@ pub fn gemv_f32(a: &[f32], x: &[f32], m: usize, n: usize) -> Result<Vec<f32>> {
         )));
     }
 
+    // Try Apple Accelerate (cBLAS) first on macOS
+    #[cfg(target_os = "macos")]
+    {
+        if accelerate_blas::is_available() {
+            match accelerate_blas::sgemv(a, x, m, n) {
+                Ok(result) => return Ok(result),
+                Err(e) => {
+                    eprintln!("Accelerate GEMV failed: {}, falling back to CPU", e);
+                }
+            }
+        }
+    }
+
+    // Fallback to CPU
     let mut y = vec![0.0f32; m];
 
     for i in 0..m {
