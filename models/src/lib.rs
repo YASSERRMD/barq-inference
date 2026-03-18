@@ -44,6 +44,7 @@ pub mod mixtral;
 pub mod qwen;
 pub mod qwen2;
 pub mod transformer;
+pub mod weight_cache;
 
 pub use arch::{LlmArch, LlmType};
 pub use arch_registry::{ArchitectureRegistry, LlmArchTrait};
@@ -54,3 +55,4 @@ pub use loader::ModelLoader;
 pub use qwen::QwenModel;
 pub use qwen2::{Qwen2MoEModel, Qwen2Model};
 pub use transformer::LlamaTransformer;
+pub use weight_cache::WeightCache;

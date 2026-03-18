@@ -10,22 +10,22 @@ use std::os::raw::{c_char, c_int};
 #[link(name = "Accelerate", kind = "framework")]
 extern "C" {
     /// cblas_sgemm - single-precision general matrix multiply
-    /// Reference: Apple Accelerate documentation
+    /// Try with scalars passed by value instead of by reference
     fn cblas_sgemm(
-        layout: c_int,     // Matrix layout: 101=RowMajor, 102=ColMajor
-        transa: c_int,     // Transpose A: 111=NoTrans, 112=Trans, 113=ConjTrans
-        transb: c_int,     // Transpose B
-        m: c_int,          // Rows of op(A) and C
-        n: c_int,          // Columns of op(B) and C
-        k: c_int,          // Columns of op(A) and rows of op(B)
-        alpha: *const f32, // Scalar
-        a: *const f32,     // Matrix A
-        lda: c_int,        // Leading dimension of A
-        b: *const f32,     // Matrix B
-        ldb: c_int,        // Leading dimension of B
-        beta: *const f32,  // Scalar
-        c: *mut f32,       // Matrix C
-        ldc: c_int,        // Leading dimension of C
+        layout: c_int, // Matrix layout: 101=RowMajor, 102=ColMajor
+        transa: c_int, // Transpose A: 111=NoTrans, 112=Trans, 113=ConjTrans
+        transb: c_int, // Transpose B
+        m: c_int,      // Rows of op(A) and C
+        n: c_int,      // Columns of op(B) and C
+        k: c_int,      // Columns of op(A) and rows of op(B)
+        alpha: f32,    // Scalar (pass by value)
+        a: *const f32, // Matrix A
+        lda: c_int,    // Leading dimension of A
+        b: *const f32, // Matrix B
+        ldb: c_int,    // Leading dimension of B
+        beta: f32,     // Scalar (pass by value)
+        c: *mut f32,   // Matrix C
+        ldc: c_int,    // Leading dimension of C
     );
 
     /// cblas_sgemv - single-precision general matrix-vector multiply
@@ -34,12 +34,12 @@ extern "C" {
         trans: c_int,
         m: c_int,
         n: c_int,
-        alpha: *const f32,
+        alpha: f32,
         a: *const f32,
         lda: c_int,
         x: *const f32,
         incx: c_int,
-        beta: *const f32,
+        beta: f32,
         y: *mut f32,
         incy: c_int,
     );
@@ -52,25 +52,59 @@ pub fn is_available() -> bool {
 }
 
 /// Matrix multiplication using Apple Accelerate's cBLAS
-///
-/// TEMPORARILY DISABLED: FFI binding issues with parameter passing
-/// Falls back to error to trigger CPU parallelization path
 #[cfg(target_os = "macos")]
-pub fn sgemm(_a: &[f32], _b: &[f32], _m: usize, _k: usize, _n: usize) -> Result<Vec<f32>> {
-    // Temporary: Return error to trigger fallback
-    Err(Error::Unsupported(
-        "Accelerate FFI temporarily disabled due to parameter passing issues".to_string(),
-    ))
+pub fn sgemm(a: &[f32], b: &[f32], m: usize, k: usize, n: usize) -> Result<Vec<f32>> {
+    let a_len = m * k;
+    let b_len = k * n;
+    let c_len = m * n;
+
+    if a.len() != a_len {
+        return Err(Error::tensor(format!(
+            "Matrix A size mismatch: expected {}, got {}",
+            a_len,
+            a.len()
+        )));
+    }
+    if b.len() != b_len {
+        return Err(Error::tensor(format!(
+            "Matrix B size mismatch: expected {}, got {}",
+            b_len,
+            b.len()
+        )));
+    }
+
+    let mut c = vec![0.0f32; c_len];
+
+    // Simple approach: Use row-major, straightforward parameters
+    // Pass scalars by value (changed FFI signature)
+    unsafe {
+        cblas_sgemm(
+            101, // CblasRowMajor
+            111, // CblasNoTrans
+            111, // CblasNoTrans
+            m as c_int,
+            n as c_int,
+            k as c_int,
+            1.0f32, // alpha (by value)
+            a.as_ptr(),
+            k as c_int, // lda = columns of A
+            b.as_ptr(),
+            n as c_int, // ldb = columns of B
+            0.0f32,     // beta (by value)
+            c.as_mut_ptr(),
+            n as c_int, // ldc = columns of C
+        );
+    }
+
+    Ok(c)
 }
 
-/// Matrix-vector multiplication using Apple Accelerate
-///
-/// TEMPORARILY DISABLED: FFI binding issues
+/// Matrix-vector multiplication using Apple Accelerate (via sgemm with m=1)
 #[cfg(target_os = "macos")]
-pub fn sgemv(_a: &[f32], _x: &[f32], _m: usize, _n: usize) -> Result<Vec<f32>> {
-    Err(Error::Unsupported(
-        "Accelerate FFI temporarily disabled".to_string(),
-    ))
+pub fn sgemv(a: &[f32], x: &[f32], m: usize, n: usize) -> Result<Vec<f32>> {
+    // A is (m, n), x is (n,) → result is (m,)
+    // Treat x as a column matrix (n, 1) and call sgemm
+    sgemm(a, x, m, n, 1)
 }
 
 // Stub implementations for non-macOS platforms
