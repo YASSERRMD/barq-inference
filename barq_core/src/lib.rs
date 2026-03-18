@@ -47,6 +47,7 @@ pub mod ops;
 pub mod ops_ref;
 pub mod platform;
 pub mod prelude;
+pub mod prompt;
 pub mod quant;
 pub mod rope;
 pub mod simd;
