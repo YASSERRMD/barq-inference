@@ -33,6 +33,7 @@
 
 pub mod arch;
 pub mod context;
+pub mod deepseek;
 pub mod ffn;
 pub mod kv_cache;
 pub mod llama;
@@ -45,6 +46,7 @@ pub mod transformer;
 
 pub use arch::{LlmArch, LlmType};
 pub use context::ModelContext;
+pub use deepseek::{DeepSeekMoEModel, DeepSeekModel};
 pub use kv_cache::{AdvancedKVCache, KVCacheStats};
 pub use loader::ModelLoader;
 pub use qwen::QwenModel;
