@@ -39,6 +39,7 @@ pub mod buffer;
 pub mod compute_graph;
 pub mod cpu;
 pub mod cuda;
+pub mod cuda_flash_attn;
 pub mod cuda_quant;
 pub mod cuda_tensor_ops;
 pub mod device;
@@ -53,6 +54,9 @@ pub use tensor_ops::{TensorOp, TensorOps};
 
 #[cfg(feature = "cuda")]
 pub use cuda::{CudaBuffer, CudaDeviceProps, CudaKernel, LaunchConfig};
+
+#[cfg(feature = "cuda")]
+pub use cuda_flash_attn::{FlashAttention, FlashAttentionConfig};
 
 #[cfg(feature = "cuda")]
 pub use cuda_quant::{QuantizedCudaOps, QuantizedGemmConfig};
