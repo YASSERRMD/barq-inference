@@ -10,7 +10,7 @@
 
 use barq_core::error::{Error, Result};
 
-pub const QK_KV: usize = 64;  // KV cache quantization block size
+pub const QK_KV: usize = 64; // KV cache quantization block size
 
 /// Q8_KV block for KV cache quantization
 ///
@@ -52,7 +52,7 @@ impl BlockQ8KV {
         let mut qs = [0u8; QK_KV];
         for (i, &v) in data.iter().enumerate() {
             let q = (v / scale).round().min(127.0).max(-127.0) as i8;
-            qs[i] = (q + 128) as u8;
+            qs[i] = (q as i16 + 128) as u8;
         }
 
         BlockQ8KV { qs, d: scale }
