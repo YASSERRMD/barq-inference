@@ -9,7 +9,7 @@
 //! - Q4_K_R4: Repacked for better CPU performance
 
 use barq_core::error::{Error, Result};
-use barq_core::tensor::{Tensor, TensorType, Shape, TensorData};
+use barq_core::tensor::{Shape, Tensor, TensorData, TensorType};
 
 /// ik_llama.cpp quantization types
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,10 +49,10 @@ impl IKQuantType {
     /// Get block size for this quantization type
     pub fn block_size(&self) -> usize {
         match self {
-            IKQuantType::IQ4_KS => 256,    // Larger blocks for better compression
+            IKQuantType::IQ4_KS => 256, // Larger blocks for better compression
             IKQuantType::IQ3_KS => 256,
             IKQuantType::IQ2_KS => 256,
-            IKQuantType::Q4_K_R4 => 32,     // Smaller blocks for CPU performance
+            IKQuantType::Q4_K_R4 => 32, // Smaller blocks for CPU performance
         }
     }
 
@@ -111,7 +111,7 @@ impl IKQuantConfig {
     pub fn cpu_optimized() -> Self {
         Self {
             quant_type: IKQuantType::Q4_K_R4,
-            enable_imatrix: false,  // Skip imatrix for CPU speed
+            enable_imatrix: false, // Skip imatrix for CPU speed
             imatrix_iterations: 5,
         }
     }
@@ -130,7 +130,7 @@ impl IKQuantConfig {
         Self {
             quant_type: IKQuantType::IQ3_KS,
             enable_imatrix: true,
-            imatrix_iterations: 15,  // More iterations for better quality
+            imatrix_iterations: 15, // More iterations for better quality
         }
     }
 
@@ -139,7 +139,7 @@ impl IKQuantConfig {
         Self {
             quant_type: IKQuantType::IQ2_KS,
             enable_imatrix: true,
-            imatrix_iterations: 20,  // Maximum iterations to preserve quality
+            imatrix_iterations: 20, // Maximum iterations to preserve quality
         }
     }
 }
@@ -161,12 +161,15 @@ pub fn quantize_model_ik(
     // TODO: Implement actual IK quantization
     // This requires calling into ik_llama.cpp quantization tools
 
-    info!("Quantizing model with IK quantization");
-    info!("Input:  {}", input_model);
-    info!("Output: {}", output_model);
-    info!("Type:   {}", config.quant_type.description());
-    info!("BPW:    {:.2}", config.quant_type.bits_per_weight());
-    info!("Block:  {}", config.quant_type.block_size());
+    info(&format!("Quantizing model with IK quantization"));
+    info(&format!("Input:  {}", input_model));
+    info(&format!("Output: {}", output_model));
+    info(&format!("Type:   {}", config.quant_type.description()));
+    info(&format!(
+        "BPW:    {:.2}",
+        config.quant_type.bits_per_weight()
+    ));
+    info(&format!("Block:  {}", config.quant_type.block_size()));
 
     // For now, this is a placeholder
     // Actual implementation would:
@@ -185,14 +188,11 @@ pub fn quantize_model_ik(
 /// # Arguments
 /// * `input_model` - Path to input Q4_K_M model
 /// * `output_model` - Path to output Q4_K_R4 model
-pub fn repack_model_cpu(
-    input_model: &str,
-    output_model: &str,
-) -> Result<()> {
-    info!("Repacking model for CPU performance");
-    info!("Input:  {}", input_model);
-    info!("Output: {}", output_model);
-    info!("Converting: Q4_K_M → Q4_K_R4");
+pub fn repack_model_cpu(input_model: &str, output_model: &str) -> Result<()> {
+    info(&format!("Repacking model for CPU performance"));
+    info(&format!("Input:  {}", input_model));
+    info(&format!("Output: {}", output_model));
+    info(&format!("Converting: Q4_K_M → Q4_K_R4"));
 
     // TODO: Implement actual repacking
     // This requires ik_llama.cpp quantization tools
