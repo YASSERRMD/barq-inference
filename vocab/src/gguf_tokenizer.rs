@@ -86,24 +86,27 @@ impl GgufTokenizer {
 
     /// Decode token IDs back to text
     fn decode_tokens(&self, ids: &[u32]) -> String {
-        let mut bytes = Vec::new();
+        let mut pieces = Vec::new();
 
         for &id in ids {
-            // Skip special tokens
-            if id == 0 || id == 1 {
-                continue;
-            }
-
-            // Convert back to byte
-            if id >= 2 {
-                let byte = (id - 2) as u8;
-                if byte.is_ascii() {
-                    bytes.push(byte);
+            // Look up token in vocabulary
+            if let Some(token) = self.id_to_token.get(&id) {
+                pieces.push(token.clone());
+            } else {
+                // Skip unknown tokens or use replacement
+                if id >= 2 {
+                    // Try to decode as byte for backward compatibility
+                    let byte = (id - 2) as u8;
+                    if byte.is_ascii() && !byte.is_ascii_control() {
+                        if let Ok(s) = std::str::from_utf8(&[byte]) {
+                            pieces.push(s.to_string());
+                        }
+                    }
                 }
             }
         }
 
-        String::from_utf8_lossy(&bytes).to_string()
+        pieces.concat()
     }
 }
 
