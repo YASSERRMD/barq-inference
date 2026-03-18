@@ -164,6 +164,8 @@ impl Model {
                 "phi3" => LlmArch::Phi3,
                 "qwen" => LlmArch::Qwen,
                 "qwen2" => LlmArch::Qwen2,
+                "qwen2.moe" => LlmArch::Qwen2Moe,
+                "qwen3" => LlmArch::Qwen3,
                 "gemma" => LlmArch::Gemma,
                 "gemma2" => LlmArch::Gemma2,
                 _ => LlmArch::Unknown,
@@ -200,19 +202,38 @@ impl Model {
                 .unwrap_or(0.0)
         };
 
-        // Try both llama and general prefixes for vocab size
+        // Detect architecture to use correct keys
+        let arch_name = reader
+            .get("general.architecture")
+            .and_then(|v| {
+                if let barq_core::gguf::GgufValue::String(s) = v {
+                    Some(s.to_lowercase())
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_default();
+
+        let is_qwen = arch_name.contains("qwen");
+
+        // Try both architecture-specific and general prefixes for vocab size
         let n_vocab = get_u32("llama.vocabulary_size");
         let n_vocab = if n_vocab == 0 {
-            reader
-                .get("general.vocab_size")
-                .and_then(|v| {
-                    if let barq_core::gguf::GgufValue::Uint32(u) = v {
-                        Some(*u)
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or(32000)
+            let qwen_vocab = get_u32("qwen.vocabulary_size");
+            if qwen_vocab == 0 {
+                reader
+                    .get("general.vocab_size")
+                    .and_then(|v| {
+                        if let barq_core::gguf::GgufValue::Uint32(u) = v {
+                            Some(*u)
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or(32000)
+            } else {
+                qwen_vocab
+            }
         } else {
             n_vocab
         };
@@ -220,6 +241,11 @@ impl Model {
         ModelHParams {
             n_layer: {
                 let v = get_u32("llama.block_count");
+                let v = if v == 0 && is_qwen {
+                    get_u32("qwen.block_count")
+                } else {
+                    v
+                };
                 if v == 0 {
                     get_u32("general.n_layers")
                 } else {
@@ -228,15 +254,38 @@ impl Model {
             },
             n_head: {
                 let v = get_u32("llama.attention.head_count");
+                let v = if v == 0 && is_qwen {
+                    get_u32("qwen.attention.head_count")
+                } else {
+                    v
+                };
                 if v == 0 {
                     get_u32("general.n_head")
                 } else {
                     v
                 }
             },
-            n_head_kv: get_u32("llama.attention.head_count_kv"),
+            n_head_kv: {
+                let v = get_u32("llama.attention.head_count_kv");
+                let v = if v == 0 && is_qwen {
+                    get_u32("qwen.attention.head_count_kv")
+                } else {
+                    v
+                };
+                // If still 0, default to n_head (full attention)
+                if v == 0 {
+                    get_u32("llama.attention.head_count")
+                } else {
+                    v
+                }
+            },
             n_embd: {
                 let v = get_u32("llama.embedding_length");
+                let v = if v == 0 && is_qwen {
+                    get_u32("qwen.embedding_length")
+                } else {
+                    v
+                };
                 if v == 0 {
                     get_u32("general.n_embd")
                 } else {
@@ -245,6 +294,11 @@ impl Model {
             },
             n_ff: {
                 let v = get_u32("llama.feed_forward_length");
+                let v = if v == 0 && is_qwen {
+                    get_u32("qwen.intermediate_size")
+                } else {
+                    v
+                };
                 if v == 0 {
                     get_u32("general.n_ff")
                 } else {
@@ -254,6 +308,11 @@ impl Model {
             n_vocab,
             n_ctx_train: {
                 let v = get_u32("llama.context_length");
+                let v = if v == 0 && is_qwen {
+                    get_u32("qwen.context_length")
+                } else {
+                    v
+                };
                 if v == 0 {
                     get_u32("general.n_context")
                 } else {
@@ -262,21 +321,44 @@ impl Model {
             },
             rope_freq_base: {
                 let v = get_f32("llama.rope.freq_base");
+                let v = if v == 0.0 && is_qwen {
+                    get_f32("qwen.rope.freq_base")
+                } else {
+                    v
+                };
+                // Qwen uses different RoPE base (1000000.0 for some models)
                 if v == 0.0 {
-                    10000.0
+                    if is_qwen {
+                        1000000.0
+                    } else {
+                        10000.0
+                    }
                 } else {
                     v
                 }
             },
             rope_freq_scale: {
                 let v = get_f32("llama.rope.freq_scale");
+                let v = if v == 0.0 && is_qwen {
+                    get_f32("qwen.rope.freq_scale")
+                } else {
+                    v
+                };
                 if v == 0.0 {
                     1.0
                 } else {
                     v
                 }
             },
-            rope_scaling_type: get_u32("llama.rope.scaling.type"),
+            rope_scaling_type: {
+                let v = get_u32("llama.rope.scaling.type");
+                let v = if v == 0 && is_qwen {
+                    get_u32("qwen.rope.scaling.type")
+                } else {
+                    v
+                };
+                v
+            },
             ..Default::default()
         }
     }
