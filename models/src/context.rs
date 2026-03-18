@@ -184,53 +184,100 @@ pub struct ModelContext {
 }
 
 /// KV cache for attention
+/// KV cache for attention
 pub struct KVCache {
-    /// Cache data
-    cache: Vec<Option<Tensor>>,
-    /// Maximum cache size
+    /// K cache per layer. Layout: [layer][head_kv] -> flattened sequence data
+    k_cache: Vec<Vec<Vec<f32>>>,
+    /// V cache per layer. Layout: [layer][head_kv] -> flattened sequence data
+    v_cache: Vec<Vec<Vec<f32>>>,
+    /// Maximum sequence length
     max_size: usize,
-    /// Current cache size
+    /// Current number of tokens in cache
     size: usize,
+    /// Number of KV heads
+    n_head_kv: usize,
 }
 
 impl KVCache {
     /// Create a new KV cache
-    pub fn new(max_size: usize, n_layers: usize) -> Self {
+    pub fn new(max_size: usize, n_layers: usize, n_head_kv: usize) -> Self {
         Self {
-            cache: vec![None; n_layers * 2], // K and V for each layer
+            k_cache: vec![vec![Vec::new(); n_head_kv]; n_layers],
+            v_cache: vec![vec![Vec::new(); n_head_kv]; n_layers],
             max_size,
             size: 0,
+            n_head_kv,
         }
     }
 
-    /// Get cache tensor for layer
-    pub fn get(&self, layer: usize, is_key: bool) -> Option<&Tensor> {
-        let idx = layer * 2 + if is_key { 0 } else { 1 };
-        self.cache.get(idx).and_then(|t| t.as_ref())
-    }
+    /// Append new K and V tokens for a specific layer.
+    /// Both `k` and `v` must be in [n_head_kv, seq_len, head_dim] flattened layout
+    pub fn append(&mut self, layer: usize, k: &[f32], v: &[f32], n_tokens: usize, head_dim: usize) {
+        if layer >= self.k_cache.len() {
+            return;
+        }
 
-    /// Set cache tensor for layer
-    pub fn set(&mut self, layer: usize, is_key: bool, tensor: Tensor) {
-        let idx = layer * 2 + if is_key { 0 } else { 1 };
-        if idx < self.cache.len() {
-            self.cache[idx] = Some(tensor);
+        // We must append head by head to maintain contiguous memory per head!
+        for h in 0..self.n_head_kv {
+            let start = h * n_tokens * head_dim;
+            let end = (h + 1) * n_tokens * head_dim;
+            
+            self.k_cache[layer][h].extend_from_slice(&k[start..end]);
+            self.v_cache[layer][h].extend_from_slice(&v[start..end]);
+        }
+
+        // Only layer 0 updates the total cache size
+        if layer == 0 {
+            self.size += n_tokens;
         }
     }
 
-    /// Clear the cache
-    pub fn clear(&mut self) {
-        self.cache.fill(None);
-        self.size = 0;
-    }
-
-    /// Returns the current cache size
+    /// Get current cache size (start_pos for new tokens)
     pub fn size(&self) -> usize {
         self.size
     }
 
-    /// Resize the cache
-    pub fn resize(&mut self, new_size: usize) {
-        self.size = new_size.min(self.max_size);
+    /// Retrieve full K cache for a layer, flattened as [n_head_kv, total_seq_len, head_dim]
+    pub fn get_k_flattened(&self, layer: usize) -> Vec<f32> {
+        let mut out = Vec::with_capacity(self.n_head_kv * self.size * 128); // rough capacity
+        for h in 0..self.n_head_kv {
+            out.extend_from_slice(&self.k_cache[layer][h]);
+        }
+        out
+    }
+
+    /// Retrieve full V cache for a layer, flattened as [n_head_kv, total_seq_len, head_dim]
+    pub fn get_v_flattened(&self, layer: usize) -> Vec<f32> {
+        let mut out = Vec::with_capacity(self.n_head_kv * self.size * 128); // rough capacity
+        for h in 0..self.n_head_kv {
+            out.extend_from_slice(&self.v_cache[layer][h]);
+        }
+        out
+    }
+
+    /// Get reference to K cache for a specific layer and head. Shape: [total_seq_len * head_dim]
+    pub fn get_k_head(&self, layer: usize, head: usize) -> &[f32] {
+        &self.k_cache[layer][head]
+    }
+
+    /// Get reference to V cache for a specific layer and head. Shape: [total_seq_len * head_dim]
+    pub fn get_v_head(&self, layer: usize, head: usize) -> &[f32] {
+        &self.v_cache[layer][head]
+    }
+
+    /// Clear the cache
+    pub fn clear(&mut self) {
+        for layer_k in &mut self.k_cache {
+            for h in layer_k {
+                h.clear();
+            }
+        }
+        for layer_v in &mut self.v_cache {
+            for h in layer_v {
+                h.clear();
+            }
+        }
+        self.size = 0;
     }
 }
 
@@ -244,7 +291,8 @@ impl ModelContext {
         };
 
         let n_layer = model.hparams.n_layer as usize;
-        let kv_cache = KVCache::new(n_ctx, n_layer);
+        let n_head_kv = model.hparams.n_head_kv as usize;
+        let kv_cache = KVCache::new(n_ctx, n_layer, n_head_kv);
 
         // Build transformer + weight cache ONCE
         let transformer = Arc::new(crate::transformer::LlamaTransformer::new(model.clone())?);
@@ -266,7 +314,16 @@ impl ModelContext {
     /// Encode a batch of tokens (no KV cache)
     pub async fn encode(&self, batch: &Batch) -> Result<Vec<f32>> {
         let mut cache = self.kv_cache.lock().await;
-        let logits = self.transformer.forward(&batch.token, &mut cache)?;
+        // Ensure cache starts empty for new encode
+        cache.clear();
+        
+        let mut pos = self.pos.lock().await;
+        *pos = 0;
+        
+        let logits = self.transformer.forward(&batch.token, &mut cache, *pos)?;
+
+        *pos += batch.n_tokens as usize;
+        
         Ok(logits)
     }
 
@@ -275,10 +332,9 @@ impl ModelContext {
         let mut pos = self.pos.lock().await;
         let mut cache = self.kv_cache.lock().await;
 
-        let logits = self.transformer.forward(&batch.token, &mut cache)?;
+        let logits = self.transformer.forward(&batch.token, &mut cache, *pos)?;
 
         *pos += batch.n_tokens as usize;
-
         Ok(logits)
     }
 
@@ -384,17 +440,17 @@ impl ModelContext {
 
         // Process prompt
         let batch = Batch::from_tokens(&current_tokens);
-        let _logits = self.encode(&batch).await?;
+        let mut logits = self.encode(&batch).await?;
 
         // Generate tokens
         for _ in 0..max_tokens {
-            let last_token = *current_tokens.last().unwrap();
-            let batch = Batch::single(last_token);
-            let logits = self.decode(&batch).await?;
-
             let token = self.sample(&logits, temperature, top_k, top_p)?;
             output.push(token);
             current_tokens.push(token);
+
+            // Feed new token to get next logits
+            let batch = Batch::single(token);
+            logits = self.decode(&batch).await?;
 
             // Check for EOS
             if token == 0 || token == 2 {

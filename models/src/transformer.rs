@@ -60,11 +60,11 @@ impl LlamaTransformer {
     // ── Public API ────────────────────────────────────────────────────────────
 
     /// Forward pass – returns logits for the next token
-    pub fn forward(&self, tokens: &[i32], kv_cache: &mut KVCache) -> Result<Vec<f32>> {
+    pub fn forward(&self, tokens: &[i32], kv_cache: &mut KVCache, start_pos: usize) -> Result<Vec<f32>> {
         let mut hidden = self.get_embeddings(tokens)?;
 
         for layer_idx in 0..self.n_layer {
-            hidden = self.forward_layer(layer_idx, &hidden, tokens.len(), kv_cache)?;
+            hidden = self.forward_layer(layer_idx, &hidden, tokens.len(), kv_cache, start_pos)?;
         }
 
         self.final_output(&hidden)
@@ -102,12 +102,13 @@ impl LlamaTransformer {
         hidden: &[f32],
         seq_len: usize,
         kv_cache: &mut KVCache,
+        start_pos: usize,
     ) -> Result<Vec<f32>> {
         // Pre-attention RMSNorm
         let norm_attn = self.rms_norm(hidden, &format!("blk.{}.attn_norm.weight", layer_idx))?;
 
         // Self-attention + residual
-        let attn_out = self.self_attention(&norm_attn, layer_idx, seq_len, kv_cache)?;
+        let attn_out = self.self_attention(&norm_attn, layer_idx, seq_len, kv_cache, start_pos)?;
         let residual = add_vectors(hidden, &attn_out);
 
         // Post-attention RMSNorm
@@ -151,7 +152,8 @@ impl LlamaTransformer {
         hidden: &[f32],
         layer_idx: usize,
         seq_len: usize,
-        _kv_cache: &mut KVCache,
+        kv_cache: &mut KVCache,
+        start_pos: usize,
     ) -> Result<Vec<f32>> {
         let n_head = self.n_head;
         let n_head_kv = self.n_head_kv;
@@ -175,12 +177,17 @@ impl LlamaTransformer {
         )?;
 
         // Apply RoPE in-place
-        let q_rope = apply_rope(&q, seq_len, n_head, head_dim);
-        let k_rope = apply_rope(&k, seq_len, n_head_kv, head_dim);
+        let q_rope = apply_rope(&q, seq_len, n_head, head_dim, start_pos);
+        let k_rope = apply_rope(&k, seq_len, n_head_kv, head_dim, start_pos);
+        let v_trans = transpose_heads(&v, seq_len, n_head_kv, head_dim);
+
+        // Update KV Cache
+        kv_cache.append(layer_idx, &k_rope, &v_trans, seq_len, head_dim);
+        let kv_len = start_pos + seq_len;
 
         // Compute attention per-head (parallelised)
         let attn_out =
-            self.compute_attention(&q_rope, &k_rope, &v, n_head, n_head_kv, head_dim, seq_len)?;
+            self.compute_attention(&q_rope, kv_cache, layer_idx, n_head, n_head_kv, head_dim, seq_len, kv_len, start_pos)?;
 
         // Output projection
         self.proj(
@@ -233,12 +240,14 @@ impl LlamaTransformer {
     fn compute_attention(
         &self,
         q: &[f32],
-        k: &[f32],
-        v: &[f32],
+        kv_cache: &KVCache,
+        layer_idx: usize,
         n_head: usize,
         n_head_kv: usize,
         head_dim: usize,
-        seq_len: usize,
+        q_len: usize,
+        kv_len: usize,
+        start_pos: usize,
     ) -> Result<Vec<f32>> {
         let scale = (head_dim as f32).sqrt();
 
@@ -247,20 +256,24 @@ impl LlamaTransformer {
             .map(|h| {
                 let kv_h = h * n_head_kv / n_head;
 
-                let q_off = h * seq_len * head_dim;
-                let k_off = kv_h * seq_len * head_dim;
-                let v_off = kv_h * seq_len * head_dim;
+                let q_off = h * q_len * head_dim;
+                let q_head = &q[q_off..q_off + q_len * head_dim];
 
-                let q_head = &q[q_off..q_off + seq_len * head_dim];
-                let k_head = &k[k_off..k_off + seq_len * head_dim];
-                let v_head = &v[v_off..v_off + seq_len * head_dim];
+                let k_head = kv_cache.get_k_head(layer_idx, kv_h);
+                let v_head = kv_cache.get_v_head(layer_idx, kv_h);
 
-                let mut out = vec![0.0f32; seq_len * head_dim];
+                let mut out = vec![0.0f32; q_len * head_dim];
 
-                for i in 0..seq_len {
-                    let mut scores = vec![0.0f32; seq_len];
+                for i in 0..q_len {
+                    let mut scores = vec![0.0f32; kv_len];
                     // Q_i · K_j
-                    for j in 0..seq_len {
+                    for j in 0..kv_len {
+                        // Apply causal mask
+                        if j > start_pos + i {
+                            scores[j] = f32::NEG_INFINITY;
+                            continue;
+                        }
+
                         let mut dot = 0.0f32;
                         for d in 0..head_dim {
                             dot += unsafe {
@@ -281,7 +294,7 @@ impl LlamaTransformer {
                         *s /= exp_sum;
                     }
                     // Weighted sum of V
-                    for j in 0..seq_len {
+                    for j in 0..kv_len {
                         let p = unsafe { *scores.get_unchecked(j) };
                         for d in 0..head_dim {
                             out[i * head_dim + d] +=
@@ -294,9 +307,9 @@ impl LlamaTransformer {
             .collect();
 
         // Interleave head outputs: [seq, head, head_dim]
-        let mut output = vec![0.0f32; seq_len * n_head * head_dim];
+        let mut output = vec![0.0f32; q_len * n_head * head_dim];
         for (h, head_out) in head_outputs.iter().enumerate() {
-            for i in 0..seq_len {
+            for i in 0..q_len {
                 let dst = i * n_head * head_dim + h * head_dim;
                 let src = i * head_dim;
                 output[dst..dst + head_dim].copy_from_slice(&head_out[src..src + head_dim]);
@@ -410,7 +423,7 @@ fn add_vectors(a: &[f32], b: &[f32]) -> Vec<f32> {
 
 /// Apply RoPE in flat [seq, n_heads, head_dim] layout
 /// Returns flat [n_heads, seq, head_dim] layout expected by compute_attention
-fn apply_rope(x: &[f32], seq_len: usize, n_heads: usize, head_dim: usize) -> Vec<f32> {
+fn apply_rope(x: &[f32], seq_len: usize, n_heads: usize, head_dim: usize, start_pos: usize) -> Vec<f32> {
     // Input: [seq_len, n_heads * head_dim]
     // Output: [n_heads, seq_len, head_dim]
     let mut out = vec![0.0f32; n_heads * seq_len * head_dim];
@@ -419,11 +432,12 @@ fn apply_rope(x: &[f32], seq_len: usize, n_heads: usize, head_dim: usize) -> Vec
         for pos in 0..seq_len {
             let src_base = pos * n_heads * head_dim + h * head_dim;
             let dst_base = h * seq_len * head_dim + pos * head_dim;
+            let abs_pos = start_pos + pos;
 
             let half = head_dim / 2;
             for i in 0..half {
                 let theta = 10000.0_f32.powf(-2.0 * i as f32 / head_dim as f32);
-                let angle = pos as f32 * theta;
+                let angle = abs_pos as f32 * theta;
                 let (sin_a, cos_a) = angle.sin_cos();
 
                 let x0 = x[src_base + i];
@@ -432,6 +446,24 @@ fn apply_rope(x: &[f32], seq_len: usize, n_heads: usize, head_dim: usize) -> Vec
                 out[dst_base + i] = x0 * cos_a - x1 * sin_a;
                 out[dst_base + i + half] = x0 * sin_a + x1 * cos_a;
             }
+        }
+    }
+
+    out
+}
+
+/// Transpose flat [seq, n_heads, head_dim] layout
+/// Returns flat [n_heads, seq, head_dim] layout expected by compute_attention
+fn transpose_heads(x: &[f32], seq_len: usize, n_heads: usize, head_dim: usize) -> Vec<f32> {
+    let mut out = vec![0.0f32; n_heads * seq_len * head_dim];
+
+    for h in 0..n_heads {
+        for pos in 0..seq_len {
+            let src_base = pos * n_heads * head_dim + h * head_dim;
+            let dst_base = h * seq_len * head_dim + pos * head_dim;
+
+            out[dst_base..dst_base + head_dim]
+                .copy_from_slice(&x[src_base..src_base + head_dim]);
         }
     }
 
