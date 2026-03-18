@@ -36,6 +36,7 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 pub mod attention;
+pub mod blas;
 pub mod context;
 pub mod error;
 pub mod gemm;
