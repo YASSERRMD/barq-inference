@@ -462,18 +462,23 @@ impl LlamaTransformer {
         let output_weight = self.model.get_tensor_blocking("output.weight");
         let output_data: Vec<f32> = match output_weight {
             Some(w) => w.as_f32_slice()?.to_vec(),
-            None => return Ok(vec![0.0; self.model.hparams().n_vocab as usize]),
+            None => {
+                let n_vocab = self.model.hparams().n_vocab as usize;
+                return Ok(vec![0.0; n_vocab]);
+            }
         };
 
-        let n_vocab = self.model.hparams().n_vocab as usize;
         let n_embd = self.n_embd;
         let seq_len = hidden.len() / n_embd;
+
+        // Calculate actual vocab size from output tensor dimensions
+        let actual_vocab_size = output_data.len() / n_embd;
 
         // Only use the last token's hidden state for next token prediction
         let last_hidden = &normalized[(seq_len - 1) * n_embd..seq_len * n_embd];
 
-        let mut logits = vec![0.0f32; n_vocab];
-        for i in 0..n_vocab {
+        let mut logits = vec![0.0f32; actual_vocab_size];
+        for i in 0..actual_vocab_size {
             let mut sum = 0.0;
             for j in 0..n_embd {
                 sum += last_hidden[j] * output_data[i * n_embd + j];
