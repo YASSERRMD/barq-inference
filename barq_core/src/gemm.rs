@@ -76,7 +76,10 @@ pub fn gemm_f32_with_config(
             use std::arch::x86_64::*;
 
             unsafe {
-                if is_x86_feature_detected!("avx2") {
+                // Prefer AVX-512 over AVX2 for better performance
+                if is_x86_feature_detected!("avx512f") {
+                    return gemm_avx512_blocked(a, b, c, m, n, k, config);
+                } else if is_x86_feature_detected!("avx2") {
                     return gemm_avx2_blocked(a, b, c, m, n, k, config);
                 }
             }
@@ -92,6 +95,83 @@ pub fn gemm_f32_with_config(
 
     // Fallback to blocked scalar implementation
     gemm_blocked_scalar(a, b, c, m, n, k, config)
+}
+
+/// Blocked GEMM with AVX-512 acceleration
+/// AVX-512 provides 512-bit registers (16 f32 values) for better throughput
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx512f")]
+unsafe fn gemm_avx512_blocked(
+    a: &[f32],
+    b: &[f32],
+    c: &mut [f32],
+    m: usize,
+    n: usize,
+    k: usize,
+    config: &GEMMConfig,
+) -> Result<()> {
+    use std::arch::x86_64::*;
+
+    let block_size = config.block_size;
+
+    // Clear output matrix
+    c.fill(0.0);
+
+    // Process in blocks for cache efficiency
+    for ii in (0..m).step_by(block_size) {
+        for jj in (0..n).step_by(block_size) {
+            for kk in (0..k).step_by(block_size) {
+                let i_end = (ii + block_size).min(m);
+                let j_end = (jj + block_size).min(n);
+                let k_end = (kk + block_size).min(k);
+
+                // Compute block: C[i:i_end, j:j_end] += A[i:i_end, k:k_end] @ B[k:k_end, j:j_end]
+                for i in ii..i_end {
+                    for k_idx in kk..k_end {
+                        let a_val = a[i * k + k_idx];
+
+                        // Broadcast a_val to all 16 lanes
+                        let a_vec = _mm512_set1_ps(a_val);
+
+                        // Load 16 elements of B at a time
+                        let mut j = jj;
+                        while j + 16 <= j_end {
+                            let b_vec = _mm512_loadu_ps(b.as_ptr().add(k_idx * n + j));
+                            let c_vec = _mm512_loadu_ps(c.as_mut_ptr().add(i * n + j));
+
+                            // FMA: c += a * b
+                            let result = _mm512_fmadd_ps(a_vec, b_vec, c_vec);
+                            _mm512_storeu_ps(c.as_mut_ptr().add(i * n + j), result);
+
+                            j += 16;
+                        }
+
+                        // Handle remaining elements with AVX2 (8 at a time)
+                        while j + 8 <= j_end {
+                            use std::arch::x86_64::*;
+                            let b_vec = _mm256_loadu_ps(b.as_ptr().add(k_idx * n + j));
+                            let c_vec = _mm256_loadu_ps(c.as_mut_ptr().add(i * n + j));
+
+                            // Convert AVX-512 vector to AVX-2
+                            let a_256 = _mm512_castps512_ps256(a_vec);
+                            let result = _mm256_fmadd_ps(a_256, b_vec, c_vec);
+                            _mm256_storeu_ps(c.as_mut_ptr().add(i * n + j), result);
+
+                            j += 8;
+                        }
+
+                        // Handle remaining elements scalar
+                        while j < j_end {
+                            c[i * n + j] += a_val * b[k_idx * n + j];
+                            j += 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
 }
 
 /// Blocked GEMM with AVX2 acceleration
