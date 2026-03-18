@@ -9,6 +9,7 @@
 
 use crate::context::KVCache;
 use crate::loader::Model;
+use barq_core::blas;
 use barq_core::error::{Error, Result};
 use rayon::prelude::*;
 use std::sync::Arc;
@@ -478,19 +479,24 @@ impl LlamaTransformer {
         // Only use the last token's hidden state for next token prediction
         let last_hidden = &normalized[(seq_len - 1) * n_embd..seq_len * n_embd];
 
-        // Parallelize computation across vocab
-        let logits: Vec<f32> = (0..actual_vocab_size)
-            .into_par_iter()
-            .map(|i| {
-                let mut sum = 0.0;
-                for j in 0..n_embd {
-                    sum += last_hidden[j] * output_data[i * n_embd + j];
-                }
-                sum
-            })
-            .collect();
+        // Use BLAS-accelerated matrix multiplication
+        // logits^T = output_data * last_hidden^T
+        // Shape: (actual_vocab_size, n_embd) * (n_embd, 1)^T = (actual_vocab_size, n_embd) * (1, n_embd)^T
+        // Result: (actual_vocab_size, 1)
 
-        Ok(logits)
+        // For this, we need: logits = matmul(last_hidden_1xN, output_data^T_NxV)
+        // Where last_hidden is (1, n_embd) and output_data is (actual_vocab_size, n_embd)
+
+        // Transpose output_data to (n_embd, actual_vocab_size)
+        let mut output_t = vec![0.0f32; actual_vocab_size * n_embd];
+        for i in 0..actual_vocab_size {
+            for j in 0..n_embd {
+                output_t[j * actual_vocab_size + i] = output_data[i * n_embd + j];
+            }
+        }
+
+        // Now compute: last_hidden (1, n_embd) * output_t (n_embd, actual_vocab_size) = (1, actual_vocab_size)
+        blas::gemm_f32(last_hidden, &output_t, 1, n_embd, actual_vocab_size)
     }
 }
 
