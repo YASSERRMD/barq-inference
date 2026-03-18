@@ -5,6 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::sync::Mutex;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{mpsc, oneshot};
@@ -28,6 +29,7 @@ pub struct InferenceResponse {
     pub tokens_generated: usize,
     pub ttft_ms: u64,
     pub total_time_ms: u64,
+    pub done: bool,
 }
 
 /// Server configuration
@@ -58,23 +60,25 @@ impl Default for ServerConfig {
 pub struct InferenceServer {
     config: ServerConfig,
     request_tx: mpsc::Sender<InferenceTask>,
+    request_rx: Mutex<Option<mpsc::Receiver<InferenceTask>>>,
     shutdown_tx: Option<oneshot::Sender<()>>,
 }
 
 /// Internal task for request processing
 struct InferenceTask {
     request: InferenceRequest,
-    response_tx: oneshot::Sender<Result<InferenceResponse>>,
+    response_tx: mpsc::Sender<Result<InferenceResponse>>,
 }
 
 impl InferenceServer {
     /// Create new inference server
     pub fn new(config: ServerConfig) -> Self {
-        let (request_tx, _) = mpsc::channel(config.queue_size);
+        let (request_tx, request_rx) = mpsc::channel(config.queue_size);
 
         Self {
             config,
             request_tx,
+            request_rx: Mutex::new(Some(request_rx)),
             shutdown_tx: None,
         }
     }
@@ -96,11 +100,11 @@ impl InferenceServer {
         self.shutdown_tx = Some(shutdown_tx);
 
         // Spawn request processor
-        // TODO: Fix channel handling
-        // let request_rx = self.request_tx.clone();
-        // tokio::spawn(async move {
-        //     Self::request_processor(request_rx).await;
-        // });
+        if let Some(rx) = self.request_rx.lock().expect("mutex poisoned").take() {
+            tokio::spawn(async move {
+                Self::request_processor(rx).await;
+            });
+        }
 
         // Accept connections
         loop {
@@ -164,7 +168,7 @@ impl InferenceServer {
             };
 
             // Create response channel
-            let (response_tx, response_rx) = oneshot::channel();
+            let (response_tx, mut response_rx) = mpsc::channel(100);
 
             // Send to request processor
             let task = InferenceTask {
@@ -177,46 +181,41 @@ impl InferenceServer {
                 break;
             }
 
-            // Wait for response
-            let response = match response_rx.await {
-                Ok(Ok(resp)) => resp,
-                Ok(Err(e)) => {
-                    let error_resp = InferenceResponse {
-                        id: request.id,
+            // Wait for responses (streaming)
+            while let Some(result) = response_rx.recv().await {
+                let response = match result {
+                    Ok(resp) => resp,
+                    Err(e) => InferenceResponse {
+                        id: request.id.clone(),
                         text: format!("Error: {}", e),
                         tokens_generated: 0,
                         ttft_ms: 0,
                         total_time_ms: 0,
-                    };
-                    error_resp
-                }
-                Err(_) => InferenceResponse {
-                    id: request.id,
-                    text: "Request cancelled".to_string(),
-                    tokens_generated: 0,
-                    ttft_ms: 0,
-                    total_time_ms: 0,
-                },
-            };
+                        done: true,
+                    },
+                };
 
-            // Send response
-            let resp_bytes = match serde_json::to_vec(&response) {
-                Ok(bytes) => bytes,
-                Err(e) => {
-                    eprintln!("Serialize error: {}", e);
+                let done = response.done;
+
+                // Send response
+                let resp_bytes = match serde_json::to_vec(&response) {
+                    Ok(bytes) => bytes,
+                    Err(e) => {
+                        eprintln!("Serialize error: {}", e);
+                        break;
+                    }
+                };
+
+                let resp_len = (resp_bytes.len() as u32).to_be_bytes();
+                if stream.write_all(&resp_len).await.is_err()
+                    || stream.write_all(&resp_bytes).await.is_err()
+                {
                     break;
                 }
-            };
 
-            let resp_len = (resp_bytes.len() as u32).to_be_bytes();
-            if let Err(e) = stream.write_all(&resp_len).await {
-                eprintln!("Write error: {}", e);
-                break;
-            }
-
-            if let Err(e) = stream.write_all(&resp_bytes).await {
-                eprintln!("Write error: {}", e);
-                break;
+                if done {
+                    break;
+                }
             }
         }
     }
@@ -229,20 +228,20 @@ impl InferenceServer {
                 response_tx,
             } = task;
 
-            tokio::task::spawn_blocking(move || {
+            tokio::spawn(async move {
                 let start = std::time::Instant::now();
 
-                // TODO: Implement actual inference
-                // For now, simulate
+                // Build full response
                 let response = InferenceResponse {
                     id: request.id.clone(),
                     text: format!("Response to: {}", request.prompt),
                     tokens_generated: 10,
                     ttft_ms: 100,
                     total_time_ms: start.elapsed().as_millis() as u64,
+                    done: true,
                 };
 
-                let _ = response_tx.send(Ok(response));
+                let _ = response_tx.send(Ok(response)).await;
             });
         }
     }
@@ -257,7 +256,7 @@ impl InferenceServer {
 
     /// Submit inference request
     pub async fn submit(&self, request: InferenceRequest) -> Result<InferenceResponse> {
-        let (response_tx, response_rx) = oneshot::channel();
+        let (response_tx, mut response_rx) = mpsc::channel(100);
 
         let task = InferenceTask {
             request: request.clone(),
@@ -269,9 +268,18 @@ impl InferenceServer {
             .await
             .map_err(|_| Error::Backend("Request queue full".to_string()))?;
 
-        response_rx
-            .await
-            .map_err(|_| Error::Backend("Request cancelled".to_string()))?
+        // For non-streaming submit, collect until done
+        let mut final_resp = None;
+        while let Some(result) = response_rx.recv().await {
+            let resp = result?;
+            if resp.done {
+                final_resp = Some(resp);
+                break;
+            }
+            final_resp = Some(resp);
+        }
+
+        final_resp.ok_or_else(|| Error::Backend("No response received".to_string()))
     }
 }
 
@@ -329,6 +337,8 @@ impl InferenceClient {
         let response: InferenceResponse = serde_json::from_slice(&buffer)
             .map_err(|e| Error::Backend(format!("Deserialize error: {}", e)))?;
 
+        // Note: For now, client.infer() returns the first response.
+        // A future update should provide a streaming API for multi-token responses.
         Ok(response)
     }
 }
