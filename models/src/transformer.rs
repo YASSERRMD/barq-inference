@@ -60,7 +60,12 @@ impl LlamaTransformer {
     // ── Public API ────────────────────────────────────────────────────────────
 
     /// Forward pass – returns logits for the next token
-    pub fn forward(&self, tokens: &[i32], kv_cache: &mut KVCache, start_pos: usize) -> Result<Vec<f32>> {
+    pub fn forward(
+        &self,
+        tokens: &[i32],
+        kv_cache: &mut KVCache,
+        start_pos: usize,
+    ) -> Result<Vec<f32>> {
         let mut hidden = self.get_embeddings(tokens)?;
 
         for layer_idx in 0..self.n_layer {
@@ -186,8 +191,9 @@ impl LlamaTransformer {
         let kv_len = start_pos + seq_len;
 
         // Compute attention per-head (parallelised)
-        let attn_out =
-            self.compute_attention(&q_rope, kv_cache, layer_idx, n_head, n_head_kv, head_dim, seq_len, kv_len, start_pos)?;
+        let attn_out = self.compute_attention(
+            &q_rope, kv_cache, layer_idx, n_head, n_head_kv, head_dim, seq_len, kv_len, start_pos,
+        )?;
 
         // Output projection
         self.proj(
@@ -423,7 +429,13 @@ fn add_vectors(a: &[f32], b: &[f32]) -> Vec<f32> {
 
 /// Apply RoPE in flat [seq, n_heads, head_dim] layout
 /// Returns flat [n_heads, seq, head_dim] layout expected by compute_attention
-fn apply_rope(x: &[f32], seq_len: usize, n_heads: usize, head_dim: usize, start_pos: usize) -> Vec<f32> {
+fn apply_rope(
+    x: &[f32],
+    seq_len: usize,
+    n_heads: usize,
+    head_dim: usize,
+    start_pos: usize,
+) -> Vec<f32> {
     // Input: [seq_len, n_heads * head_dim]
     // Output: [n_heads, seq_len, head_dim]
     let mut out = vec![0.0f32; n_heads * seq_len * head_dim];
@@ -462,8 +474,7 @@ fn transpose_heads(x: &[f32], seq_len: usize, n_heads: usize, head_dim: usize) -
             let src_base = pos * n_heads * head_dim + h * head_dim;
             let dst_base = h * seq_len * head_dim + pos * head_dim;
 
-            out[dst_base..dst_base + head_dim]
-                .copy_from_slice(&x[src_base..src_base + head_dim]);
+            out[dst_base..dst_base + head_dim].copy_from_slice(&x[src_base..src_base + head_dim]);
         }
     }
 
