@@ -51,7 +51,11 @@ pub use buffer::{Buffer, BufferType, CpuBuffer, GpuBuffer};
 pub use cpu::CpuBackend;
 pub use cuda::CudaBackend;
 pub use device::{CpuDevice, Device, DeviceType, GpuDevice};
+pub use metal::MetalBackend;
 pub use tensor_ops::{TensorOp, TensorOps};
+
+#[cfg(feature = "metal")]
+pub use metal::{MetalBuffer, MetalCommandBuffer, MetalComputeEncoder, MetalDeviceProps};
 
 #[cfg(feature = "cuda")]
 pub use cuda::{CudaBuffer, CudaDeviceProps, CudaKernel, LaunchConfig};
