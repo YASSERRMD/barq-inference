@@ -166,6 +166,8 @@ impl Model {
                 "qwen2" => LlmArch::Qwen2,
                 "qwen2.moe" => LlmArch::Qwen2Moe,
                 "qwen3" => LlmArch::Qwen3,
+                "deepseek" => LlmArch::DeepSeek,
+                "deepseek.moe" => LlmArch::DeepSeekMoE,
                 "gemma" => LlmArch::Gemma,
                 "gemma2" => LlmArch::Gemma2,
                 _ => LlmArch::Unknown,
@@ -215,11 +217,17 @@ impl Model {
             .unwrap_or_default();
 
         let is_qwen = arch_name.contains("qwen");
+        let is_deepseek = arch_name.contains("deepseek");
 
         // Try both architecture-specific and general prefixes for vocab size
         let n_vocab = get_u32("llama.vocabulary_size");
         let n_vocab = if n_vocab == 0 {
             let qwen_vocab = get_u32("qwen.vocabulary_size");
+            let qwen_vocab = if qwen_vocab == 0 && is_deepseek {
+                get_u32("deepseek.vocabulary_size")
+            } else {
+                qwen_vocab
+            };
             if qwen_vocab == 0 {
                 reader
                     .get("general.vocab_size")
@@ -230,7 +238,7 @@ impl Model {
                             None
                         }
                     })
-                    .unwrap_or(32000)
+                    .unwrap_or(102400) // DeepSeek uses larger vocab
             } else {
                 qwen_vocab
             }
@@ -243,6 +251,11 @@ impl Model {
                 let v = get_u32("llama.block_count");
                 let v = if v == 0 && is_qwen {
                     get_u32("qwen.block_count")
+                } else {
+                    v
+                };
+                let v = if v == 0 && is_deepseek {
+                    get_u32("deepseek.block_count")
                 } else {
                     v
                 };
@@ -259,6 +272,11 @@ impl Model {
                 } else {
                     v
                 };
+                let v = if v == 0 && is_deepseek {
+                    get_u32("deepseek.attention.head_count")
+                } else {
+                    v
+                };
                 if v == 0 {
                     get_u32("general.n_head")
                 } else {
@@ -269,6 +287,11 @@ impl Model {
                 let v = get_u32("llama.attention.head_count_kv");
                 let v = if v == 0 && is_qwen {
                     get_u32("qwen.attention.head_count_kv")
+                } else {
+                    v
+                };
+                let v = if v == 0 && is_deepseek {
+                    get_u32("deepseek.attention.head_count_kv")
                 } else {
                     v
                 };
@@ -286,6 +309,11 @@ impl Model {
                 } else {
                     v
                 };
+                let v = if v == 0 && is_deepseek {
+                    get_u32("deepseek.embedding_length")
+                } else {
+                    v
+                };
                 if v == 0 {
                     get_u32("general.n_embd")
                 } else {
@@ -296,6 +324,11 @@ impl Model {
                 let v = get_u32("llama.feed_forward_length");
                 let v = if v == 0 && is_qwen {
                     get_u32("qwen.intermediate_size")
+                } else {
+                    v
+                };
+                let v = if v == 0 && is_deepseek {
+                    get_u32("deepseek.intermediate_size")
                 } else {
                     v
                 };
@@ -313,6 +346,11 @@ impl Model {
                 } else {
                     v
                 };
+                let v = if v == 0 && is_deepseek {
+                    get_u32("deepseek.context_length")
+                } else {
+                    v
+                };
                 if v == 0 {
                     get_u32("general.n_context")
                 } else {
@@ -326,10 +364,17 @@ impl Model {
                 } else {
                     v
                 };
-                // Qwen uses different RoPE base (1000000.0 for some models)
+                let v = if v == 0.0 && is_deepseek {
+                    get_f32("deepseek.rope.freq_base")
+                } else {
+                    v
+                };
+                // Qwen and DeepSeek use different RoPE bases
                 if v == 0.0 {
                     if is_qwen {
                         1000000.0
+                    } else if is_deepseek {
+                        10000.0 // DeepSeek uses standard base with Yarn scaling
                     } else {
                         10000.0
                     }
@@ -344,6 +389,11 @@ impl Model {
                 } else {
                     v
                 };
+                let v = if v == 0.0 && is_deepseek {
+                    get_f32("deepseek.rope.freq_scale")
+                } else {
+                    v
+                };
                 if v == 0.0 {
                     1.0
                 } else {
@@ -354,6 +404,11 @@ impl Model {
                 let v = get_u32("llama.rope.scaling.type");
                 let v = if v == 0 && is_qwen {
                     get_u32("qwen.rope.scaling.type")
+                } else {
+                    v
+                };
+                let v = if v == 0 && is_deepseek {
+                    get_u32("deepseek.rope.scaling.type")
                 } else {
                     v
                 };
