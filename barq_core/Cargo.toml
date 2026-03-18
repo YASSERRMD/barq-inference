@@ -37,16 +37,25 @@ rand_chacha = "0.3"
 byteorder = "1.5"
 num_cpus = "1.16"
 
+# BLAS dependencies for Apple Accelerate
+[target.'cfg(target_os = "macos")'.dependencies]
+blas-src = { version = "0.9", features = ["accelerate"], optional = true }
+blas = { version = "0.22", optional = true }
+
 # GPU dependencies (optional)
 cudarc = { version = "0.12", optional = true }
 metal = { version = "0.28", optional = true }
+
+[build-dependencies]
+cc = "1.0"
 
 [dev-dependencies]
 criterion = "0.5"
 proptest = "1.5"
 
 [features]
-default = ["simd"]
+default = ["simd", "metal"]
 simd = []
 cuda = ["dep:cudarc"]
 metal = ["dep:metal"]
+accelerate = ["dep:blas", "dep:blas-src"]

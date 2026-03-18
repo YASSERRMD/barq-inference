@@ -35,6 +35,7 @@
 //   // TODO: Re-enable after adding missing docs
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
+pub mod accelerate_blas;
 pub mod attention;
 pub mod blas;
 pub mod context;
