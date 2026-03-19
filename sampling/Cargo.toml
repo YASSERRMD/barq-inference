@@ -23,6 +23,7 @@ rand = "0.8"
 rand_chacha = "0.3"
 
 barq_core = { path = "../barq_core" }
+vocab = { path = "../vocab" }
 
 [dev-dependencies]
 criterion = "0.5"

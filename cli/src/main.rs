@@ -113,6 +113,10 @@ enum Commands {
         /// Speculation preset: code, creative, max-speed
         #[arg(long)]
         speculation_preset: Option<String>,
+
+        /// Constrain output to JSON object mode
+        #[arg(long)]
+        json: bool,
     },
 
     /// Interactive chat mode
@@ -291,6 +295,7 @@ async fn main() -> anyhow::Result<()> {
             speculative,
             draft_max,
             speculation_preset,
+            json,
         } => {
             cmd_run(
                 model,
@@ -304,6 +309,7 @@ async fn main() -> anyhow::Result<()> {
                 speculative,
                 draft_max,
                 speculation_preset,
+                json,
             )
             .await
         }
@@ -350,8 +356,14 @@ async fn cmd_run(
     speculative: bool,
     draft_max: usize,
     speculation_preset: Option<String>,
+    json_mode: bool,
 ) -> anyhow::Result<()> {
-    use models::{context::ContextParams, llama::LlamaModel, loader::Model};
+    use models::{
+        context::{Batch, ContextParams},
+        llama::LlamaModel,
+        loader::Model,
+    };
+    use sampling::{JsonMode, JsonSchema};
     use std::sync::Arc;
     use vocab::{GgufTokenizer, Tokenizer};
 
@@ -366,6 +378,7 @@ async fn cmd_run(
     info!("Vocab size: {}", loaded_model.hparams().n_vocab);
     info!("Embedding dim: {}", loaded_model.hparams().n_embd);
     info!("Layers: {}", loaded_model.hparams().n_layer);
+    let model_vocab_size = loaded_model.hparams().n_vocab as usize;
 
     // Create tokenizer
     let tokenizer = GgufTokenizer::from_gguf(loaded_model.metadata());
@@ -379,6 +392,14 @@ async fn cmd_run(
         .collect();
 
     info!("Prompt tokens: {}", prompt_tokens.len());
+    if prompt_tokens.is_empty() {
+        return Err(anyhow::anyhow!(
+            "Prompt tokenized to no tokens; cannot start generation"
+        ));
+    }
+    if json_mode {
+        info!("JSON mode: enabled");
+    }
 
     // Create inference context
     let model_arc = Arc::new(loaded_model);
@@ -395,9 +416,63 @@ async fn cmd_run(
     info!("Generating {} tokens...", max_tokens);
     let start = std::time::Instant::now();
 
-    let generated_tokens = context
-        .generate(&prompt_tokens, max_tokens, temperature, top_k, top_p)
-        .await?;
+    let (generated_tokens, output_text) = if json_mode {
+        let schema = JsonSchema::Object {
+            properties: vec![],
+            required: vec![],
+        };
+        let grammar_sampler = if tokenizer.vocab().is_empty() {
+            JsonMode::create_sampler(&schema, model_vocab_size)?
+        } else {
+            JsonMode::create_sampler_with_vocab(&schema, tokenizer.vocab())?
+        };
+
+        let mut grammar_sampler = grammar_sampler;
+        let prompt_batch = Batch::from_tokens(&prompt_tokens);
+        let mut logits = context.encode(&prompt_batch).await?;
+        let mut generated_tokens = Vec::with_capacity(max_tokens);
+
+        for _ in 0..max_tokens {
+            let mut constrained_logits = logits.clone();
+            grammar_sampler.apply_constraints(&mut constrained_logits)?;
+            let token = context.sample(&constrained_logits, temperature, top_k, top_p)?;
+            generated_tokens.push(token);
+
+            let token_text = tokenizer
+                .vocab()
+                .get_token(token as u32)
+                .map(|token| token.text.as_str())
+                .unwrap_or("");
+            grammar_sampler.accept_token(token as usize, token_text)?;
+
+            if let Some(eos) = tokenizer.vocab().special_tokens().eos {
+                if token as u32 == eos {
+                    break;
+                }
+            }
+
+            let batch = Batch::single(token);
+            logits = context.decode(&batch).await?;
+        }
+
+        if generated_tokens.is_empty() {
+            return Err(anyhow::anyhow!("JSON mode produced no tokens"));
+        }
+
+        let generated_ids: Vec<u32> = generated_tokens.iter().map(|&id| id as u32).collect();
+        let output_text = tokenizer.decode(&generated_ids).await?;
+        let parsed_json = JsonMode::validate_output(&output_text)?;
+        let pretty_output = serde_json::to_string_pretty(&parsed_json)?;
+
+        (generated_tokens, pretty_output)
+    } else {
+        let generated_tokens = context
+            .generate(&prompt_tokens, max_tokens, temperature, top_k, top_p)
+            .await?;
+        let generated_ids: Vec<u32> = generated_tokens.iter().map(|&id| id as u32).collect();
+        let output_text = tokenizer.decode(&generated_ids).await?;
+        (generated_tokens, output_text)
+    };
 
     let elapsed = start.elapsed();
     info!(
@@ -407,11 +482,10 @@ async fn cmd_run(
         generated_tokens.len() as f64 / elapsed.as_secs_f64()
     );
 
-    // Decode output
-    let generated_ids: Vec<u32> = generated_tokens.iter().map(|&id| id as u32).collect();
-    let output_text = tokenizer.decode(&generated_ids).await?;
-
-    println!("\n=== Output ===");
+    println!(
+        "\n=== {} ===",
+        if json_mode { "JSON Output" } else { "Output" }
+    );
     println!("{}", output_text);
     println!("\n=== Stats ===");
     println!("Tokens generated: {}", generated_tokens.len());

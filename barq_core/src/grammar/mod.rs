@@ -35,6 +35,9 @@ pub enum GrammarError {
 
     #[error("Invalid JSON schema: {0}")]
     InvalidJsonSchema(String),
+
+    #[error("Invalid JSON output: {0}")]
+    InvalidJsonOutput(String),
 }
 
 /// GBNF Grammar
