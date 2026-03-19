@@ -15,6 +15,7 @@ use std::sync::Arc;
 /// Qwen model specific implementations
 pub struct QwenModel {
     model: Arc<Model>,
+    transformer: Arc<crate::transformer::LlamaTransformer>,
 }
 
 impl QwenModel {
@@ -27,12 +28,18 @@ impl QwenModel {
             )));
         }
 
-        Ok(Self { model })
+        let transformer = Arc::new(crate::transformer::LlamaTransformer::new(model.clone())?);
+
+        Ok(Self { model, transformer })
     }
 
     /// Create an inference context
     pub fn create_context(&self, params: ContextParams) -> Result<ModelContext> {
-        ModelContext::new(Arc::clone(&self.model), params)
+        ModelContext::new(
+            Arc::clone(&self.model),
+            params,
+            Arc::clone(&self.transformer),
+        )
     }
 
     /// Returns the model

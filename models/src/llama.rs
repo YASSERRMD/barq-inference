@@ -9,6 +9,7 @@ use std::sync::Arc;
 /// LLaMA model specific implementations
 pub struct LlamaModel {
     model: Arc<Model>,
+    transformer: Arc<crate::transformer::LlamaTransformer>,
 }
 
 impl LlamaModel {
@@ -21,17 +22,28 @@ impl LlamaModel {
             )));
         }
 
-        Ok(Self { model })
+        let transformer = Arc::new(crate::transformer::LlamaTransformer::new(model.clone())?);
+
+        Ok(Self { model, transformer })
     }
 
     /// Create an inference context
     pub fn create_context(&self, params: ContextParams) -> Result<ModelContext> {
-        ModelContext::new(Arc::clone(&self.model), params)
+        ModelContext::new(
+            Arc::clone(&self.model),
+            params,
+            Arc::clone(&self.transformer),
+        )
     }
 
     /// Returns the model
     pub fn inner(&self) -> &Model {
         &self.model
+    }
+
+    /// Returns the cached transformer (shared across all contexts)
+    pub fn transformer(&self) -> Arc<crate::transformer::LlamaTransformer> {
+        Arc::clone(&self.transformer)
     }
 }
 

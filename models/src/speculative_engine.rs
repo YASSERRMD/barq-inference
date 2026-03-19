@@ -147,8 +147,11 @@ impl SpeculativeEngine {
             ..ContextParams::gpu_optimized()
         };
 
-        let target_ctx = ModelContext::new(target_model.clone(), target_params)?;
-        let draft_ctx = ModelContext::new(draft_model.clone(), draft_params)?;
+        let target_transformer = Arc::new(crate::transformer::LlamaTransformer::new(target_model.clone())?);
+        let target_ctx = ModelContext::new(target_model.clone(), target_params, target_transformer)?;
+        
+        let draft_transformer = Arc::new(crate::transformer::LlamaTransformer::new(draft_model.clone())?);
+        let draft_ctx = ModelContext::new(draft_model.clone(), draft_params, draft_transformer)?;
 
         Ok(Self {
             target_model,
