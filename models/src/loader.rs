@@ -103,6 +103,9 @@ impl Model {
                     GgufValue::Float32(f) => {
                         metadata_map.insert(key.clone(), f.to_string());
                     }
+                    GgufValue::Bool(b) => {
+                        metadata_map.insert(key.clone(), b.to_string());
+                    }
                     // Handle arrays - especially tokenizer tokens
                     GgufValue::Array(arr) => {
                         if key == "tokenizer.ggml.tokens" {
