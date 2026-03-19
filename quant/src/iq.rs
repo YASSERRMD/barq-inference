@@ -393,6 +393,353 @@ pub fn dequantize_iq(data: &[u8], config: &IQQuantConfig) -> Result<Vec<f32>> {
     }
 }
 
+/// Quantize IQ data using the selected configuration.
+///
+/// The encoder path is intentionally conservative:
+/// - it uses the exact packed layouts expected by the dequantizers above
+/// - it favors deterministic, in-repo behavior over the full ik_llama.cpp search
+///   stack, which depends on importance-matrix tooling that is not wired in here
+pub fn quantize_iq(data: &[f32], config: &IQQuantConfig) -> Result<Vec<u8>> {
+    match config.iq_type {
+        IQType::IQ4_KS => quantize_iq4_ks(data),
+        IQType::IQ3_KS => quantize_iq3_ks(data),
+        IQType::IQ2_KS => quantize_iq2_ks(data),
+        IQType::Q4_K_R4 => quantize_q4_k_r4(data),
+        _ => Err(Error::Unsupported(format!(
+            "Quantization for {:?} is not implemented yet",
+            config.iq_type
+        ))),
+    }
+}
+
+const IQ_ROW_SIZE: usize = 256;
+
+fn pad_row(row: &[f32]) -> [f32; IQ_ROW_SIZE] {
+    let mut padded = [0.0f32; IQ_ROW_SIZE];
+    let len = row.len().min(IQ_ROW_SIZE);
+    padded[..len].copy_from_slice(&row[..len]);
+    padded
+}
+
+fn best_codebook_index(value: f32, scale: f32, codebook: &[i8]) -> usize {
+    if codebook.is_empty() || scale == 0.0 {
+        return 0;
+    }
+
+    let mut best_idx = 0usize;
+    let mut best_err = f32::INFINITY;
+
+    for (idx, &entry) in codebook.iter().enumerate() {
+        let candidate = scale * entry as f32;
+        let err = (value - candidate).abs();
+        if err < best_err {
+            best_err = err;
+            best_idx = idx;
+        }
+    }
+
+    best_idx
+}
+
+fn best_codebook_subset(value: &[f32], scale: f32, first: &[i8], second: &[i8]) -> bool {
+    let mut err_first = 0.0f32;
+    let mut err_second = 0.0f32;
+
+    for &v in value {
+        let idx_first = best_codebook_index(v, scale, first);
+        let idx_second = best_codebook_index(v, scale, second);
+        let cand_first = scale * first[idx_first] as f32;
+        let cand_second = scale * second[idx_second] as f32;
+        err_first += (v - cand_first).abs();
+        err_second += (v - cand_second).abs();
+    }
+
+    err_second < err_first
+}
+
+fn quantize_rows_as_bytes<F>(data: &[f32], mut encode_row: F) -> Result<Vec<u8>>
+where
+    F: FnMut(&[f32]) -> Result<Vec<u8>>,
+{
+    if data.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let n_rows = data.len().div_ceil(IQ_ROW_SIZE);
+    let mut output = Vec::new();
+
+    for row_idx in 0..n_rows {
+        let start = row_idx * IQ_ROW_SIZE;
+        let end = (start + IQ_ROW_SIZE).min(data.len());
+        let row = pad_row(&data[start..end]);
+        output.extend(encode_row(&row)?);
+    }
+
+    Ok(output)
+}
+
+fn quantize_iq4_ks_row(row: &[f32]) -> Result<Vec<u8>> {
+    let row = pad_row(row);
+    let max_abs = row.iter().map(|v| v.abs()).fold(0.0f32, f32::max);
+    let d = if max_abs > 0.0 { max_abs / 127.0 } else { 0.0 };
+
+    let mut out = Vec::with_capacity(4 + 136);
+    out.extend_from_slice(&d.to_le_bytes());
+
+    let mut block = [0u8; 136];
+    let base = &IQ4K_VALUES[0..16];
+    let shifted = &IQ4K_VALUES[16..32];
+
+    for sub in 0..8 {
+        let sub_values = &row[sub * 32..sub * 32 + 32];
+        let use_shifted = best_codebook_subset(sub_values, d, base, shifted);
+        let codebook = if use_shifted { shifted } else { base };
+        block[sub] = if use_shifted { 129 } else { 128 };
+
+        for byte_idx in 0..16 {
+            let lhs = sub_values[byte_idx * 2];
+            let rhs = sub_values[byte_idx * 2 + 1];
+            let q0 = best_codebook_index(lhs, d, codebook) as u8;
+            let q1 = best_codebook_index(rhs, d, codebook) as u8;
+            block[8 + sub * 16 + byte_idx] = q0 | (q1 << 4);
+        }
+    }
+
+    out.extend_from_slice(&block);
+    Ok(out)
+}
+
+fn quantize_iq3_ks_row(row: &[f32]) -> Result<Vec<u8>> {
+    let row = pad_row(row);
+    let max_abs = row.iter().map(|v| v.abs()).fold(0.0f32, f32::max);
+    let d = if max_abs > 0.0 {
+        max_abs / (16.0 * 63.0)
+    } else {
+        0.0
+    };
+
+    let mut out = Vec::with_capacity(2 + 102);
+    out.extend_from_slice(&f16::from_f32(d).to_le_bytes());
+
+    let mut block = [0u8; 102];
+    let codebook = &IQ3NL_VALUES[0..8];
+
+    for i128 in 0..2 {
+        let qs_base = i128 * 32;
+        let qh_base = i128 * 16;
+
+        for j in 0..32 {
+            let mut qs_byte = 0u8;
+            let values = &row[i128 * 128..i128 * 128 + 128];
+
+            for ib in 0..4 {
+                let idx = ib * 32 + j;
+                let code = best_codebook_index(values[idx], -16.0 * d, codebook) as u8;
+                qs_byte |= (code & 0x03) << (2 * ib);
+                if code & 0x04 != 0 {
+                    block[70 + j] |= 1 << (4 * i128 + ib);
+                }
+            }
+
+            block[6 + qs_base + j] = qs_byte;
+        }
+
+        for j in 0..4 {
+            block[2 + j] = 0;
+        }
+
+        for j in 0..4 {
+            block[2 + j + 4] = 0;
+        }
+
+        for j in 0..4 {
+            let _ = qh_base + j;
+        }
+    }
+
+    out.extend_from_slice(&block);
+    Ok(out)
+}
+
+fn quantize_iq2_ks_row(row: &[f32]) -> Result<Vec<u8>> {
+    let row = pad_row(row);
+    let max_abs = row.iter().map(|v| v.abs()).fold(0.0f32, f32::max);
+    let d = if max_abs > 0.0 {
+        max_abs / (16.0 * 31.0)
+    } else {
+        0.0
+    };
+
+    let mut out = Vec::with_capacity(2 + 70);
+    out.extend_from_slice(&f16::from_f32(d).to_le_bytes());
+
+    let mut block = [0u8; 70];
+    let codebook = &IQ2NL_VALUES[0..4];
+
+    for ib64 in 0..4 {
+        let shift = if ib64 % 2 == 0 { 0 } else { 4 };
+        let qs_base = (ib64 / 2) * 32;
+
+        for j in 0..32 {
+            let a = row[ib64 * 64 + j];
+            let b = row[ib64 * 64 + j + 32];
+            let qa = best_codebook_index(a, -16.0 * d, codebook) as u8;
+            let qb = best_codebook_index(b, -16.0 * d, codebook) as u8;
+            let mut qs_byte = block[6 + qs_base + j];
+            qs_byte |= (qa & 0x03) << shift;
+            qs_byte |= (qb & 0x03) << (shift + 2);
+            block[6 + qs_base + j] = qs_byte;
+        }
+    }
+
+    out.extend_from_slice(&block);
+    Ok(out)
+}
+
+fn quantize_q4_k_r4_row_group(rows: &[[f32; IQ_ROW_SIZE]; 4]) -> Result<Vec<u8>> {
+    let mut d = [0f32; 4];
+    let mut m = [0f32; 4];
+    let mut row_qs = [[0u8; IQ_ROW_SIZE / 2]; 4];
+
+    for (row_idx, row) in rows.iter().enumerate() {
+        let min_val = row.iter().fold(f32::INFINITY, |acc, &v| acc.min(v));
+        let max_val = row.iter().fold(f32::NEG_INFINITY, |acc, &v| acc.max(v));
+        let offset = if min_val < 0.0 { -min_val } else { 0.0 };
+        let range = max_val + offset;
+
+        d[row_idx] = if range > 0.0 { range / 15.0 } else { 1.0 };
+        m[row_idx] = offset;
+
+        for (i, &value) in row.iter().enumerate() {
+            let q = if d[row_idx] > 0.0 {
+                ((value + offset) / d[row_idx]).round().clamp(0.0, 15.0) as u8
+            } else {
+                0
+            };
+
+            let byte_idx = i / 2;
+            let shift = if i % 2 == 0 { 0 } else { 4 };
+            row_qs[row_idx][byte_idx] |= q << shift;
+        }
+    }
+
+    let mut out = Vec::with_capacity(576);
+    for &scale in &d {
+        out.extend_from_slice(&f16::from_f32(scale).to_le_bytes());
+    }
+    for &offset in &m {
+        out.extend_from_slice(&f16::from_f32(offset).to_le_bytes());
+    }
+
+    let mut scales_l = [0u8; 32];
+    let scales_h = [0u8; 16];
+    scales_l.fill(0x11);
+    out.extend_from_slice(&scales_h);
+    out.extend_from_slice(&scales_l);
+
+    let mut qs = [0u8; 512];
+    for ib in 0..8 {
+        for row_idx in 0..4 {
+            let src_start = ib * 16;
+            let src_end = src_start + 16;
+            let dst_start = ib * 64 + row_idx * 16;
+            qs[dst_start..dst_start + 16].copy_from_slice(&row_qs[row_idx][src_start..src_end]);
+        }
+    }
+    out.extend_from_slice(&qs);
+
+    Ok(out)
+}
+
+/// Quantize IQ4_KS data into packed bytes.
+pub fn quantize_iq4_ks(data: &[f32]) -> Result<Vec<u8>> {
+    quantize_rows_as_bytes(data, quantize_iq4_ks_row)
+}
+
+/// Quantize IQ3_KS data into packed bytes.
+pub fn quantize_iq3_ks(data: &[f32]) -> Result<Vec<u8>> {
+    quantize_rows_as_bytes(data, quantize_iq3_ks_row)
+}
+
+/// Quantize IQ2_KS data into packed bytes.
+pub fn quantize_iq2_ks(data: &[f32]) -> Result<Vec<u8>> {
+    quantize_rows_as_bytes(data, quantize_iq2_ks_row)
+}
+
+/// Quantize Q4_K_R4 data into packed bytes.
+///
+/// The layout follows the interleaved 4-row block structure used by ik_llama.cpp.
+pub fn quantize_q4_k_r4(data: &[f32]) -> Result<Vec<u8>> {
+    if data.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut output = Vec::new();
+    let n_groups = data.len().div_ceil(IQ_ROW_SIZE * 4);
+
+    for group_idx in 0..n_groups {
+        let mut rows = [[0.0f32; IQ_ROW_SIZE]; 4];
+
+        for row_idx in 0..4 {
+            let src_row = group_idx * 4 * IQ_ROW_SIZE + row_idx * IQ_ROW_SIZE;
+            let src_end = (src_row + IQ_ROW_SIZE).min(data.len());
+            if src_row < data.len() {
+                rows[row_idx][..(src_end - src_row)].copy_from_slice(&data[src_row..src_end]);
+            }
+        }
+
+        output.extend_from_slice(&quantize_q4_k_r4_row_group(&rows)?);
+    }
+
+    Ok(output)
+}
+
+fn quantize_iq4_ks_row_best_effort(row: &[f32; IQ_ROW_SIZE]) -> Vec<f32> {
+    let d = row.iter().map(|v| v.abs()).fold(0.0f32, f32::max) / 127.0;
+    row.iter()
+        .map(|&v| {
+            let idx = best_codebook_index(v, d, &IQ4K_VALUES[0..16]);
+            d * IQ4K_VALUES[0..16][idx] as f32
+        })
+        .collect()
+}
+
+fn quantize_iq3_ks_row_best_effort(row: &[f32; IQ_ROW_SIZE]) -> Vec<f32> {
+    let d = row.iter().map(|v| v.abs()).fold(0.0f32, f32::max) / (16.0 * 63.0);
+    row.iter()
+        .map(|&v| {
+            let idx = best_codebook_index(v, -16.0 * d, &IQ3NL_VALUES[0..8]);
+            -16.0 * d * IQ3NL_VALUES[0..8][idx] as f32
+        })
+        .collect()
+}
+
+fn quantize_iq2_ks_row_best_effort(row: &[f32; IQ_ROW_SIZE]) -> Vec<f32> {
+    let d = row.iter().map(|v| v.abs()).fold(0.0f32, f32::max) / (16.0 * 31.0);
+    row.iter()
+        .map(|&v| {
+            let idx = best_codebook_index(v, -16.0 * d, &IQ2NL_VALUES[0..4]);
+            -16.0 * d * IQ2NL_VALUES[0..4][idx] as f32
+        })
+        .collect()
+}
+
+fn quantize_q4_k_r4_row_best_effort(rows: &[[f32; IQ_ROW_SIZE]; 4]) -> Vec<f32> {
+    let mut flattened = Vec::with_capacity(IQ_ROW_SIZE * 4);
+    for row in rows {
+        let min_val = row.iter().fold(f32::INFINITY, |acc, &v| acc.min(v));
+        let max_val = row.iter().fold(f32::NEG_INFINITY, |acc, &v| acc.max(v));
+        let offset = if min_val < 0.0 { -min_val } else { 0.0 };
+        let range = max_val + offset;
+        let d = if range > 0.0 { range / 15.0 } else { 1.0 };
+        flattened.extend(row.iter().map(|&v| {
+            let q = ((v + offset) / d).round().clamp(0.0, 15.0);
+            d * q - offset
+        }));
+    }
+    flattened
+}
+
 /// Estimate the number of elements from raw data length
 fn estimate_n_elements(data: &[u8], config: &IQQuantConfig) -> usize {
     let (header, block_bytes, qk_k) = match config.iq_type {
@@ -472,5 +819,39 @@ mod tests {
         data[0..2].copy_from_slice(&f16::ONE.to_le_bytes());
         let result = dequantize_iq3_ks(&data, 256).unwrap();
         assert_eq!(result.len(), 256);
+    }
+
+    #[test]
+    fn test_quantize_iq4_ks_constant_block() {
+        let input = vec![1.0f32; 256];
+        let bytes = quantize_iq4_ks(&input).unwrap();
+        let decoded = dequantize_iq4_ks(&bytes, 256).unwrap();
+        assert_eq!(decoded.len(), 256);
+        assert!(decoded.iter().all(|&v| v.is_finite()));
+    }
+
+    #[test]
+    fn test_quantize_iq3_ks_constant_block() {
+        let input = vec![2.0f32; 256];
+        let bytes = quantize_iq3_ks(&input).unwrap();
+        let decoded = dequantize_iq3_ks(&bytes, 256).unwrap();
+        assert_eq!(decoded.len(), 256);
+        assert!(decoded.iter().all(|&v| v.is_finite()));
+    }
+
+    #[test]
+    fn test_quantize_iq2_ks_constant_block() {
+        let input = vec![3.0f32; 256];
+        let bytes = quantize_iq2_ks(&input).unwrap();
+        let decoded = dequantize_iq2_ks(&bytes, 256).unwrap();
+        assert_eq!(decoded.len(), 256);
+        assert!(decoded.iter().all(|&v| v.is_finite()));
+    }
+
+    #[test]
+    fn test_quantize_q4_k_r4_size() {
+        let input = vec![0.5f32; 256 * 4];
+        let bytes = quantize_q4_k_r4(&input).unwrap();
+        assert_eq!(bytes.len(), 576);
     }
 }
