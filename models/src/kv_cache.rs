@@ -5,20 +5,136 @@
 //! - Automatic defragmentation to reclaim space
 //! - Cache statistics for monitoring
 //! - Efficient token management for long contexts
+//! - Optional Q8_KV quantized storage for lower memory usage
 
 use barq_core::error::{Error, Result};
 use barq_core::tensor::{Shape, Tensor, TensorData, TensorType};
+use quant::Q8KV;
 use std::collections::VecDeque;
+
+/// Runtime KV cache storage mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KVCacheQuantization {
+    /// Store K/V tensors as dense f32 values.
+    F32,
+    /// Store K/V tensors as Q8_KV blocks.
+    Q8KV,
+}
+
+impl Default for KVCacheQuantization {
+    fn default() -> Self {
+        Self::F32
+    }
+}
+
+#[derive(Debug, Clone)]
+struct QuantizedTensor {
+    data: Vec<u8>,
+    shape: Shape,
+    num_elements: usize,
+}
+
+impl QuantizedTensor {
+    fn from_tensor(tensor: &Tensor) -> Result<Self> {
+        let dense = tensor.to_f32()?;
+        let values = dense.as_f32_slice()?;
+        let quantized = Q8KV::new().quantize(values)?;
+
+        Ok(Self {
+            data: quantized,
+            shape: dense.shape().clone(),
+            num_elements: dense.num_elements(),
+        })
+    }
+
+    fn to_tensor(&self) -> Result<Tensor> {
+        let values = Q8KV::new().dequantize(&self.data, self.num_elements)?;
+        Tensor::new(
+            None,
+            TensorType::F32,
+            self.shape.clone(),
+            TensorData::F32(values),
+        )
+    }
+
+    fn stored_bytes(&self) -> usize {
+        self.data.len()
+    }
+
+    fn baseline_bytes(&self) -> usize {
+        self.num_elements * std::mem::size_of::<f32>()
+    }
+}
+
+#[derive(Debug, Clone)]
+enum KVCacheTensor {
+    Dense(Tensor),
+    Quantized(QuantizedTensor),
+}
+
+impl KVCacheTensor {
+    fn from_tensor(tensor: Tensor, quantization: KVCacheQuantization) -> Result<Self> {
+        match quantization {
+            KVCacheQuantization::F32 => Ok(Self::Dense(tensor)),
+            KVCacheQuantization::Q8KV => {
+                Ok(Self::Quantized(QuantizedTensor::from_tensor(&tensor)?))
+            }
+        }
+    }
+
+    fn to_tensor(&self) -> Result<Tensor> {
+        match self {
+            Self::Dense(tensor) => Ok(tensor.clone()),
+            Self::Quantized(tensor) => tensor.to_tensor(),
+        }
+    }
+
+    fn stored_bytes(&self) -> usize {
+        match self {
+            Self::Dense(tensor) => tensor.byte_size(),
+            Self::Quantized(tensor) => tensor.stored_bytes(),
+        }
+    }
+
+    fn baseline_bytes(&self) -> usize {
+        match self {
+            Self::Dense(tensor) => tensor.byte_size(),
+            Self::Quantized(tensor) => tensor.baseline_bytes(),
+        }
+    }
+}
 
 /// KV cache entry for a single token position
 #[derive(Debug, Clone)]
 struct KVCacheEntry {
     /// Key tensor for this position [num_heads, head_dim]
-    k: Tensor,
+    k: KVCacheTensor,
     /// Value tensor for this position [num_heads, head_dim]
-    v: Tensor,
+    v: KVCacheTensor,
     /// Physical position in the cache (may differ from logical position)
     physical_pos: usize,
+}
+
+impl KVCacheEntry {
+    fn new(k: Tensor, v: Tensor, quantization: KVCacheQuantization) -> Result<Self> {
+        Ok(Self {
+            k: KVCacheTensor::from_tensor(k, quantization)?,
+            v: KVCacheTensor::from_tensor(v, quantization)?,
+            physical_pos: 0,
+        })
+    }
+
+    fn to_tensors(&self) -> Result<(Tensor, Tensor)> {
+        Ok((self.k.to_tensor()?, self.v.to_tensor()?))
+    }
+
+    fn stored_bytes(&self) -> usize {
+        self.k.stored_bytes() + self.v.stored_bytes()
+    }
+
+    fn baseline_bytes(&self) -> usize {
+        self.k.baseline_bytes() + self.v.baseline_bytes()
+    }
 }
 
 /// Statistics about the KV cache
@@ -63,6 +179,8 @@ pub struct AdvancedKVCache {
     head_dim: usize,
     /// Maximum cache capacity in tokens
     capacity: usize,
+    /// Storage quantization mode for newly inserted entries
+    quantization: KVCacheQuantization,
     /// Current number of tokens in cache
     len: usize,
     /// Defragmentation threshold (0.0-1.0)
@@ -86,6 +204,7 @@ impl AdvancedKVCache {
             num_heads,
             head_dim,
             capacity,
+            quantization: KVCacheQuantization::F32,
             len: 0,
             defrag_threshold: 0.3, // Defrag when 30% fragmented
             stats: KVCacheStats {
@@ -99,6 +218,22 @@ impl AdvancedKVCache {
     pub fn with_defrag_threshold(mut self, threshold: f32) -> Self {
         self.defrag_threshold = threshold.clamp(0.0, 1.0);
         self
+    }
+
+    /// Set the runtime storage quantization mode.
+    pub fn with_quantization(mut self, quantization: KVCacheQuantization) -> Self {
+        self.quantization = quantization;
+        self
+    }
+
+    /// Enable Q8_KV storage for newly inserted cache entries.
+    pub fn with_q8_kv(self) -> Self {
+        self.with_quantization(KVCacheQuantization::Q8KV)
+    }
+
+    /// Current storage quantization mode.
+    pub fn quantization(&self) -> KVCacheQuantization {
+        self.quantization
     }
 
     /// Insert KV pair for a token position
@@ -125,13 +260,19 @@ impl AdvancedKVCache {
         if pos < self.logical_to_physical.len() && self.logical_to_physical[pos].is_some() {
             // Update existing entry
             let physical_pos = self.logical_to_physical[pos].unwrap();
-            if let Some(entry) = self.cache.get_mut(physical_pos) {
-                *entry = Some(KVCacheEntry { k, v, physical_pos });
+            let entry = KVCacheEntry::new(k, v, self.quantization)?;
+            if let Some(slot) = self.cache.get_mut(physical_pos) {
+                *slot = Some(KVCacheEntry {
+                    physical_pos,
+                    ..entry
+                });
+            } else {
+                return Err(Error::tensor("KV cache corruption: missing physical slot"));
             }
         } else {
             // Insert new entry
-            if self.len >= self.capacity {
-                // Need to evict or defrag
+            if self.find_free_slot().is_none() {
+                // Compact before declaring the cache full.
                 self.defragment()?;
             }
 
@@ -140,7 +281,9 @@ impl AdvancedKVCache {
                 .find_free_slot()
                 .ok_or_else(|| Error::tensor("KV cache is full, cannot insert"))?;
 
-            self.cache[physical_pos] = Some(KVCacheEntry { k, v, physical_pos });
+            let mut entry = KVCacheEntry::new(k, v, self.quantization)?;
+            entry.physical_pos = physical_pos;
+            self.cache[physical_pos] = Some(entry);
 
             // Update mappings
             if pos >= self.logical_to_physical.len() {
@@ -173,7 +316,7 @@ impl AdvancedKVCache {
         match &self.cache[physical_pos] {
             Some(entry) => {
                 self.stats.cache_hits += 1;
-                Ok(Some((entry.k.clone(), entry.v.clone())))
+                Ok(Some(entry.to_tensors()?))
             }
             None => {
                 self.stats.cache_misses += 1;
@@ -236,20 +379,26 @@ impl AdvancedKVCache {
         for entry in self.cache.iter_mut() {
             *entry = None;
         }
-        self.logical_to_physical.clear();
+        let logical_len = self.logical_to_physical.len();
+        self.logical_to_physical = vec![None; logical_len];
         self.physical_to_logical = vec![None; self.capacity];
 
         // Rebuild cache in compact form
-        for (new_physical_pos, (logical_pos, entry)) in entries.iter().enumerate() {
-            let mut new_entry = entry.clone();
-            new_entry.physical_pos = new_physical_pos;
+        for (new_physical_pos, (logical_pos, mut entry)) in entries.into_iter().enumerate() {
+            entry.physical_pos = new_physical_pos;
 
-            self.cache[new_physical_pos] = Some(new_entry);
-            self.logical_to_physical.push(Some(new_physical_pos));
-            self.physical_to_logical[new_physical_pos] = Some(*logical_pos);
+            self.cache[new_physical_pos] = Some(entry);
+            if logical_pos < self.logical_to_physical.len() {
+                self.logical_to_physical[logical_pos] = Some(new_physical_pos);
+            }
+            self.physical_to_logical[new_physical_pos] = Some(logical_pos);
         }
 
-        self.len = entries.len();
+        self.len = self
+            .logical_to_physical
+            .iter()
+            .filter(|slot| slot.is_some())
+            .count();
         self.update_stats();
 
         Ok(())
@@ -316,11 +465,48 @@ impl AdvancedKVCache {
     pub fn capacity(&self) -> usize {
         self.capacity
     }
+
+    /// Return the currently stored bytes in the cache.
+    pub fn memory_bytes(&self) -> usize {
+        self.cache
+            .iter()
+            .filter_map(|entry| entry.as_ref())
+            .map(|entry| entry.stored_bytes())
+            .sum()
+    }
+
+    /// Return the dense-f32 baseline bytes for the current entries.
+    pub fn baseline_memory_bytes(&self) -> usize {
+        self.cache
+            .iter()
+            .filter_map(|entry| entry.as_ref())
+            .map(|entry| entry.baseline_bytes())
+            .sum()
+    }
+
+    /// Ratio of stored bytes to dense-f32 baseline bytes.
+    pub fn compression_ratio(&self) -> f32 {
+        let baseline = self.baseline_memory_bytes();
+        if baseline == 0 {
+            1.0
+        } else {
+            self.memory_bytes() as f32 / baseline as f32
+        }
+    }
+
+    /// Fraction of bytes saved compared to dense-f32 storage.
+    pub fn memory_savings_ratio(&self) -> f32 {
+        1.0 - self.compression_ratio()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn tensor_from_values(values: Vec<f32>, shape: Shape) -> Tensor {
+        Tensor::new(None, TensorType::F32, shape, TensorData::F32(values)).unwrap()
+    }
 
     #[test]
     fn test_kv_cache_creation() {
@@ -450,5 +636,107 @@ mod tests {
 
         assert!(cache.is_empty());
         assert_eq!(cache.len(), 0);
+    }
+
+    #[test]
+    fn test_kv_cache_q8_roundtrip() {
+        let mut cache = AdvancedKVCache::new(2, 64, 4).with_q8_kv();
+
+        let shape = Shape::new(vec![2, 64]);
+        let k_values: Vec<f32> = (0..128).map(|i| (i as f32 - 64.0) / 32.0).collect();
+        let v_values: Vec<f32> = (0..128).map(|i| ((i as f32 % 17.0) - 8.0) / 24.0).collect();
+
+        cache
+            .insert(
+                0,
+                tensor_from_values(k_values.clone(), shape.clone()),
+                tensor_from_values(v_values.clone(), shape.clone()),
+            )
+            .unwrap();
+
+        assert_eq!(cache.quantization(), KVCacheQuantization::Q8KV);
+
+        let result = cache.get(0).unwrap();
+        assert!(result.is_some());
+
+        let (k, v) = result.unwrap();
+        assert_eq!(k.shape().dims(), shape.dims());
+        assert_eq!(v.shape().dims(), shape.dims());
+
+        let k_data = k.as_f32_slice().unwrap();
+        let v_data = v.as_f32_slice().unwrap();
+
+        for (orig, deq) in k_values.iter().zip(k_data.iter()) {
+            assert!((orig - deq).abs() < 0.05);
+        }
+
+        for (orig, deq) in v_values.iter().zip(v_data.iter()) {
+            assert!((orig - deq).abs() < 0.05);
+        }
+    }
+
+    #[test]
+    fn test_kv_cache_q8_memory_savings() {
+        let shape = Shape::new(vec![2, 64]);
+        let k_values: Vec<f32> = (0..128).map(|i| (i as f32 - 64.0) / 32.0).collect();
+        let v_values: Vec<f32> = (0..128).map(|i| ((i as f32 % 17.0) - 8.0) / 24.0).collect();
+
+        let mut dense_cache = AdvancedKVCache::new(2, 64, 4);
+        dense_cache
+            .insert(
+                0,
+                tensor_from_values(k_values.clone(), shape.clone()),
+                tensor_from_values(v_values.clone(), shape.clone()),
+            )
+            .unwrap();
+
+        let mut quant_cache = AdvancedKVCache::new(2, 64, 4).with_q8_kv();
+        quant_cache
+            .insert(
+                0,
+                tensor_from_values(k_values, shape.clone()),
+                tensor_from_values(v_values, shape),
+            )
+            .unwrap();
+
+        assert!(quant_cache.memory_bytes() < dense_cache.memory_bytes());
+        assert!(quant_cache.compression_ratio() < 1.0);
+        assert!(quant_cache.memory_savings_ratio() > 0.7);
+    }
+
+    #[test]
+    fn test_kv_cache_q8_defragmentation_preserves_mapping() {
+        let mut cache = AdvancedKVCache::new(2, 64, 4).with_q8_kv();
+
+        let shape = Shape::new(vec![2, 64]);
+        let k_one: Vec<f32> = (0..128).map(|i| (i as f32 - 32.0) / 48.0).collect();
+        let v_one: Vec<f32> = (0..128).map(|i| ((i as f32 % 9.0) - 4.0) / 16.0).collect();
+        let k_two: Vec<f32> = (0..128).map(|i| (i as f32 - 16.0) / 40.0).collect();
+        let v_two: Vec<f32> = (0..128).map(|i| ((i as f32 % 11.0) - 5.0) / 20.0).collect();
+
+        cache
+            .insert(
+                5,
+                tensor_from_values(k_one.clone(), shape.clone()),
+                tensor_from_values(v_one.clone(), shape.clone()),
+            )
+            .unwrap();
+        cache
+            .insert(
+                1,
+                tensor_from_values(k_two.clone(), shape.clone()),
+                tensor_from_values(v_two.clone(), shape.clone()),
+            )
+            .unwrap();
+
+        cache.defragment().unwrap();
+
+        let first = cache.get(1).unwrap().unwrap();
+        let second = cache.get(5).unwrap().unwrap();
+
+        assert_eq!(first.0.shape().dims(), shape.dims());
+        assert_eq!(second.1.shape().dims(), shape.dims());
+        assert_eq!(cache.len(), 2);
+        assert_eq!(cache.stats().defrag_count, 1);
     }
 }
