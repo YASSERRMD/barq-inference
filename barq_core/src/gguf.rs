@@ -467,6 +467,8 @@ impl GgufReader {
                 return Err(Error::Unsupported("Q4_1 not yet implemented".to_string()))
             }
             GgufTensorType::Q8_0 => self.load_q8_0(&dimensions, total_elements)?,
+            GgufTensorType::Q2_K => self.load_q2_k(&dimensions, total_elements)?,
+            GgufTensorType::Q3_K => self.load_q3_k(&dimensions, total_elements)?,
             GgufTensorType::Q4_K => self.load_q4_k(&dimensions, total_elements)?,
             GgufTensorType::Q6_K => self.load_q6_k(&dimensions, total_elements)?,
             GgufTensorType::IQ4_KS
@@ -623,6 +625,42 @@ impl GgufReader {
 
         output.truncate(total_elements);
         Ok(crate::tensor::TensorData::F32(output))
+    }
+
+    /// Load Q2_K quantized tensor and dequantize to f32
+    fn load_q2_k(
+        &mut self,
+        _dimensions: &[u64],
+        total_elements: usize,
+    ) -> Result<crate::tensor::TensorData> {
+        let data = self.read_quantized_blocks(total_elements, 84)?;
+        let values = dequantize_q2_k_bytes(&data, total_elements)?;
+        Ok(crate::tensor::TensorData::F32(values))
+    }
+
+    /// Load Q3_K quantized tensor and dequantize to f32
+    fn load_q3_k(
+        &mut self,
+        _dimensions: &[u64],
+        total_elements: usize,
+    ) -> Result<crate::tensor::TensorData> {
+        let data = self.read_quantized_blocks(total_elements, 110)?;
+        let values = dequantize_q3_k_bytes(&data, total_elements)?;
+        Ok(crate::tensor::TensorData::F32(values))
+    }
+
+    fn read_quantized_blocks(
+        &mut self,
+        total_elements: usize,
+        bytes_per_block: usize,
+    ) -> Result<Vec<u8>> {
+        const QK_K: usize = 256;
+
+        let n_blocks = total_elements.div_ceil(QK_K);
+        let total_bytes = n_blocks * bytes_per_block;
+        let mut data = vec![0u8; total_bytes];
+        self.reader.read_exact(&mut data).map_err(Error::Io)?;
+        Ok(data)
     }
 
     /// Load Q4_K_M quantized tensor and dequantize to f32
@@ -812,6 +850,212 @@ impl GgufReader {
     }
 }
 
+const QK_K: usize = 256;
+const Q2K_BLOCK_BYTES: usize = 84;
+const Q3K_BLOCK_BYTES: usize = 110;
+
+fn dequantize_q2_k_bytes(data: &[u8], total_elements: usize) -> Result<Vec<f32>> {
+    let n_blocks = total_elements.div_ceil(QK_K);
+    let expected_bytes = n_blocks * Q2K_BLOCK_BYTES;
+
+    if data.len() < expected_bytes {
+        return Err(Error::InvalidGguf(format!(
+            "Q2_K tensor needs {} bytes for {} blocks, got {}",
+            expected_bytes,
+            n_blocks,
+            data.len()
+        )));
+    }
+
+    let mut output = vec![0.0f32; n_blocks * QK_K];
+
+    for block_idx in 0..n_blocks {
+        let block_start = block_idx * Q2K_BLOCK_BYTES;
+        let block = &data[block_start..block_start + Q2K_BLOCK_BYTES];
+        let out_start = block_idx * QK_K;
+        let out_end = out_start + QK_K;
+        dequantize_q2_k_block(block, &mut output[out_start..out_end])?;
+    }
+
+    output.truncate(total_elements);
+    Ok(output)
+}
+
+fn dequantize_q2_k_block(block: &[u8], output: &mut [f32]) -> Result<()> {
+    if block.len() != Q2K_BLOCK_BYTES {
+        return Err(Error::InvalidGguf(format!(
+            "Q2_K block must be {} bytes, got {}",
+            Q2K_BLOCK_BYTES,
+            block.len()
+        )));
+    }
+    if output.len() < QK_K {
+        return Err(Error::InvalidGguf(format!(
+            "Q2_K output buffer must hold at least {} values, got {}",
+            QK_K,
+            output.len()
+        )));
+    }
+
+    let scales = &block[0..16];
+    let qs = &block[16..80];
+    let d = half::f16::from_le_bytes([block[80], block[81]]).to_f32();
+    let min = half::f16::from_le_bytes([block[82], block[83]]).to_f32();
+
+    let mut out_idx = 0usize;
+    let mut is = 0usize;
+
+    for q_offset in (0..QK_K).step_by(128) {
+        let q_base = q_offset / 4;
+        let mut shift = 0usize;
+
+        for _ in 0..4 {
+            let sc = scales[is];
+            is += 1;
+            let dl = d * (sc & 0x0f) as f32;
+            let ml = min * (sc >> 4) as f32;
+
+            for l in 0..16 {
+                let q = ((qs[q_base + l] >> shift) & 3) as f32;
+                output[out_idx] = dl * q - ml;
+                out_idx += 1;
+            }
+
+            let sc = scales[is];
+            is += 1;
+            let dl = d * (sc & 0x0f) as f32;
+            let ml = min * (sc >> 4) as f32;
+
+            for l in 0..16 {
+                let q = ((qs[q_base + 16 + l] >> shift) & 3) as f32;
+                output[out_idx] = dl * q - ml;
+                out_idx += 1;
+            }
+
+            shift += 2;
+        }
+    }
+
+    debug_assert_eq!(out_idx, QK_K);
+    Ok(())
+}
+
+fn dequantize_q3_k_bytes(data: &[u8], total_elements: usize) -> Result<Vec<f32>> {
+    let n_blocks = total_elements.div_ceil(QK_K);
+    let expected_bytes = n_blocks * Q3K_BLOCK_BYTES;
+
+    if data.len() < expected_bytes {
+        return Err(Error::InvalidGguf(format!(
+            "Q3_K tensor needs {} bytes for {} blocks, got {}",
+            expected_bytes,
+            n_blocks,
+            data.len()
+        )));
+    }
+
+    let mut output = vec![0.0f32; n_blocks * QK_K];
+
+    for block_idx in 0..n_blocks {
+        let block_start = block_idx * Q3K_BLOCK_BYTES;
+        let block = &data[block_start..block_start + Q3K_BLOCK_BYTES];
+        let out_start = block_idx * QK_K;
+        let out_end = out_start + QK_K;
+        dequantize_q3_k_block(block, &mut output[out_start..out_end])?;
+    }
+
+    output.truncate(total_elements);
+    Ok(output)
+}
+
+fn decode_q3_k_scales(scales: &[u8; 12]) -> [i8; 16] {
+    let kmask1 = 0x0303_0303u32;
+    let kmask2 = 0x0f0f_0f0fu32;
+
+    let mut aux = [
+        u32::from_le_bytes([scales[0], scales[1], scales[2], scales[3]]),
+        u32::from_le_bytes([scales[4], scales[5], scales[6], scales[7]]),
+        u32::from_le_bytes([scales[8], scales[9], scales[10], scales[11]]),
+        0u32,
+    ];
+
+    let tmp = aux[2];
+    aux[2] = ((aux[0] >> 4) & kmask2) | (((tmp >> 4) & kmask1) << 4);
+    aux[3] = ((aux[1] >> 4) & kmask2) | (((tmp >> 6) & kmask1) << 4);
+    aux[0] = (aux[0] & kmask2) | (((tmp >> 0) & kmask1) << 4);
+    aux[1] = (aux[1] & kmask2) | (((tmp >> 2) & kmask1) << 4);
+
+    let mut decoded = [0i8; 16];
+    for (word_idx, word) in aux.iter().enumerate() {
+        let bytes = word.to_le_bytes();
+        for (byte_idx, byte) in bytes.iter().enumerate() {
+            decoded[word_idx * 4 + byte_idx] = i8::from_ne_bytes([*byte]);
+        }
+    }
+
+    decoded
+}
+
+fn dequantize_q3_k_block(block: &[u8], output: &mut [f32]) -> Result<()> {
+    if block.len() != Q3K_BLOCK_BYTES {
+        return Err(Error::InvalidGguf(format!(
+            "Q3_K block must be {} bytes, got {}",
+            Q3K_BLOCK_BYTES,
+            block.len()
+        )));
+    }
+    if output.len() < QK_K {
+        return Err(Error::InvalidGguf(format!(
+            "Q3_K output buffer must hold at least {} values, got {}",
+            QK_K,
+            output.len()
+        )));
+    }
+
+    let mut scales_bytes = [0u8; 12];
+    scales_bytes.copy_from_slice(&block[96..108]);
+    let scales = decode_q3_k_scales(&scales_bytes);
+    let hmask = &block[0..32];
+    let qs = &block[32..96];
+    let d_all = half::f16::from_le_bytes([block[108], block[109]]).to_f32();
+
+    let mut out_idx = 0usize;
+    let mut scale_idx = 0usize;
+    let mut m = 1u8;
+
+    for q_offset in (0..QK_K).step_by(128) {
+        let q_base = q_offset / 4;
+        let mut shift = 0usize;
+
+        for _ in 0..4 {
+            let dl = d_all * (scales[scale_idx] as f32 - 32.0);
+            scale_idx += 1;
+
+            for l in 0..16 {
+                let q = ((qs[q_base + l] >> shift) & 3) as i8;
+                let high = if (hmask[l] & m) != 0 { 0 } else { 4 };
+                output[out_idx] = dl * (q - high) as f32;
+                out_idx += 1;
+            }
+
+            let dl = d_all * (scales[scale_idx] as f32 - 32.0);
+            scale_idx += 1;
+
+            for l in 0..16 {
+                let q = ((qs[q_base + 16 + l] >> shift) & 3) as i8;
+                let high = if (hmask[l + 16] & m) != 0 { 0 } else { 4 };
+                output[out_idx] = dl * (q - high) as f32;
+                out_idx += 1;
+            }
+
+            shift += 2;
+            m <<= 1;
+        }
+    }
+
+    debug_assert_eq!(out_idx, QK_K);
+    Ok(())
+}
+
 impl TensorType {
     /// Parse from u32 (GGUF type ID)
     fn from_u32(value: u32) -> Result<Self> {
@@ -840,5 +1084,27 @@ mod tests {
     fn test_gguf_type() {
         assert_eq!(GgufType::from_u32(0).unwrap(), GgufType::Uint8);
         assert_eq!(GgufType::from_u32(8).unwrap(), GgufType::String);
+    }
+
+    #[test]
+    fn test_dequantize_q2_k_bytes_constant_block() {
+        let mut block = [0u8; Q2K_BLOCK_BYTES];
+        block[0..16].fill(0x11);
+        block[80..82].copy_from_slice(&half::f16::from_f32(1.0).to_bits().to_le_bytes());
+        block[82..84].copy_from_slice(&half::f16::from_f32(1.0).to_bits().to_le_bytes());
+
+        let values = dequantize_q2_k_bytes(&block, QK_K).unwrap();
+        assert_eq!(values.len(), QK_K);
+        assert!(values.iter().all(|&v| v == -1.0));
+    }
+
+    #[test]
+    fn test_dequantize_q3_k_bytes_zero_block() {
+        let mut block = [0u8; Q3K_BLOCK_BYTES];
+        block[108..110].copy_from_slice(&half::f16::from_f32(1.0).to_bits().to_le_bytes());
+
+        let values = dequantize_q3_k_bytes(&block, QK_K).unwrap();
+        assert_eq!(values.len(), QK_K);
+        assert!(values.iter().all(|&v| v == 128.0));
     }
 }
