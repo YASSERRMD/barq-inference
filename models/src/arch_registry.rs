@@ -11,6 +11,7 @@ use crate::mistral::MistralModel;
 use crate::mixtral::MixtralModel;
 use crate::qwen::QwenModel;
 use crate::qwen2::{Qwen2MoEModel, Qwen2Model};
+use crate::qwen3::Qwen3Model;
 use barq_core::error::{Error, Result};
 use std::sync::Arc;
 
@@ -229,6 +230,32 @@ impl LlmArchTrait for Qwen2MoEModel {
     }
 }
 
+impl LlmArchTrait for Qwen3Model {
+    fn arch(&self) -> LlmArch {
+        LlmArch::Qwen3
+    }
+
+    fn model(&self) -> &Model {
+        self.inner()
+    }
+
+    fn supports_gqa(&self) -> bool {
+        self.has_gqa()
+    }
+
+    fn supports_rope_scaling(&self) -> bool {
+        self.has_ntk_scaling()
+    }
+
+    fn features(&self) -> Vec<&'static str> {
+        let mut features = vec!["NTK-aware RoPE"];
+        if self.supports_gqa() {
+            features.push("GQA");
+        }
+        features
+    }
+}
+
 impl LlmArchTrait for DeepSeekModel {
     fn arch(&self) -> LlmArch {
         LlmArch::DeepSeek
@@ -284,6 +311,7 @@ impl ArchitectureRegistry {
             LlmArch::Qwen => Ok(Box::new(QwenModel::new(model)?)),
             LlmArch::Qwen2 => Ok(Box::new(Qwen2Model::new(model)?)),
             LlmArch::Qwen2Moe => Ok(Box::new(Qwen2MoEModel::new(model)?)),
+            LlmArch::Qwen3 => Ok(Box::new(Qwen3Model::new(model)?)),
             LlmArch::DeepSeek => Ok(Box::new(DeepSeekModel::new(model)?)),
             LlmArch::DeepSeekMoE => Ok(Box::new(DeepSeekMoEModel::new(model)?)),
             _ => Err(Error::Unsupported(format!(
@@ -302,6 +330,7 @@ impl ArchitectureRegistry {
             LlmArch::Qwen,
             LlmArch::Qwen2,
             LlmArch::Qwen2Moe,
+            LlmArch::Qwen3,
             LlmArch::DeepSeek,
             LlmArch::DeepSeekMoE,
         ]
@@ -321,6 +350,7 @@ impl ArchitectureRegistry {
             "qwen" => Some(LlmArch::Qwen),
             "qwen2" => Some(LlmArch::Qwen2),
             "qwen2.moe" | "qwen2moe" => Some(LlmArch::Qwen2Moe),
+            "qwen3" => Some(LlmArch::Qwen3),
             "deepseek" => Some(LlmArch::DeepSeek),
             "deepseek.moe" | "deepseekmoe" => Some(LlmArch::DeepSeekMoE),
             _ => None,
@@ -336,6 +366,7 @@ impl ArchitectureRegistry {
             LlmArch::Qwen => "Qwen - Alibaba Cloud, NTK-aware RoPE",
             LlmArch::Qwen2 => "Qwen2 - GQA, improved RoPE",
             LlmArch::Qwen2Moe => "Qwen2-MoE - Mixture of Experts variant",
+            LlmArch::Qwen3 => "Qwen3 - GQA, NTK-aware RoPE",
             LlmArch::DeepSeek => "DeepSeek - MLA (Multi-head Latent Attention)",
             LlmArch::DeepSeekMoE => "DeepSeek-MoE - MLA with sparse experts",
             _ => "Unknown architecture",
@@ -351,6 +382,7 @@ impl ArchitectureRegistry {
             LlmArch::Qwen => vec!["NTK-aware RoPE"],
             LlmArch::Qwen2 => vec!["GQA", "NTK-aware RoPE"],
             LlmArch::Qwen2Moe => vec!["MoE", "GQA", "NTK-aware RoPE"],
+            LlmArch::Qwen3 => vec!["GQA", "NTK-aware RoPE"],
             LlmArch::DeepSeek => vec!["MLA", "SwiGLU", "Yarn RoPE"],
             LlmArch::DeepSeekMoE => vec!["MoE", "MLA", "SwiGLU", "Load Balancing"],
             _ => vec![],
@@ -376,6 +408,10 @@ mod tests {
             ArchitectureRegistry::from_name("qwen2.moe"),
             Some(LlmArch::Qwen2Moe)
         );
+        assert_eq!(
+            ArchitectureRegistry::from_name("qwen3"),
+            Some(LlmArch::Qwen3)
+        );
         assert_eq!(ArchitectureRegistry::from_name("unknown"), None);
     }
 
@@ -387,6 +423,7 @@ mod tests {
         assert!(supported.contains(&LlmArch::Mixtral));
         assert!(supported.contains(&LlmArch::Qwen));
         assert!(supported.contains(&LlmArch::Qwen2));
+        assert!(supported.contains(&LlmArch::Qwen3));
     }
 
     #[test]
@@ -395,5 +432,12 @@ mod tests {
         assert!(caps.contains(&"MoE"));
         assert!(caps.contains(&"GQA"));
         assert!(caps.contains(&"Sliding Window"));
+    }
+
+    #[test]
+    fn test_qwen3_capabilities() {
+        let caps = ArchitectureRegistry::capabilities(LlmArch::Qwen3);
+        assert!(caps.contains(&"GQA"));
+        assert!(caps.contains(&"NTK-aware RoPE"));
     }
 }
