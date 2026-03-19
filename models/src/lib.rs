@@ -50,7 +50,7 @@ pub use arch::{LlmArch, LlmType};
 pub use arch_registry::{ArchitectureRegistry, LlmArchTrait};
 pub use context::ModelContext;
 pub use deepseek::{DeepSeekMoEModel, DeepSeekModel};
-pub use kv_cache::{AdvancedKVCache, KVCacheStats};
+pub use kv_cache::{AdvancedKVCache, KVCacheQuantization, KVCacheStats};
 pub use loader::ModelLoader;
 pub use qwen::QwenModel;
 pub use qwen2::{Qwen2MoEModel, Qwen2Model};

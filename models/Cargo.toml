@@ -23,6 +23,7 @@ num_cpus = "1.16"
 rand = "0.8"
 
 barq_core = { path = "../barq_core" }
+quant = { path = "../quant" }
 vocab = { path = "../vocab" }
 
 [features]
