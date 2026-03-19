@@ -122,11 +122,10 @@ impl Model {
                         GgufValue::Bool(b) => {
                             metadata_map.insert(key.clone(), b.to_string());
                         }
-                        // Handle arrays - especially tokenizer tokens
+                        // Handle arrays - especially tokenizer tokens, merges, and token types.
                         GgufValue::Array(arr) => {
-                            if key == "tokenizer.ggml.tokens" {
-                                // Convert token array to JSON for storage
-                                let tokens: Vec<String> = arr
+                            if key == "tokenizer.ggml.tokens" || key == "tokenizer.ggml.merges" {
+                                let items: Vec<String> = arr
                                     .iter()
                                     .filter_map(|v| {
                                         if let GgufValue::String(s) = v {
@@ -136,7 +135,19 @@ impl Model {
                                         }
                                     })
                                     .collect();
-                                if let Ok(json) = serde_json::to_string(&tokens) {
+                                if let Ok(json) = serde_json::to_string(&items) {
+                                    metadata_map.insert(key.clone(), json);
+                                }
+                            } else if key == "tokenizer.ggml.token_type" {
+                                let token_types: Vec<i32> = arr
+                                    .iter()
+                                    .filter_map(|v| match v {
+                                        GgufValue::Int32(i) => Some(*i),
+                                        GgufValue::Uint32(u) => Some(*u as i32),
+                                        _ => None,
+                                    })
+                                    .collect();
+                                if let Ok(json) = serde_json::to_string(&token_types) {
                                     metadata_map.insert(key.clone(), json);
                                 }
                             } else {
@@ -265,204 +276,169 @@ impl Model {
             })
             .unwrap_or_default();
 
-        let is_qwen = arch_name.contains("qwen");
+        let get_u32_any = |keys: &[&str]| -> u32 {
+            keys.iter()
+                .find_map(|key| {
+                    let value = get_u32(key);
+                    if value == 0 {
+                        None
+                    } else {
+                        Some(value)
+                    }
+                })
+                .unwrap_or(0)
+        };
+
+        let get_f32_any = |keys: &[&str]| -> f32 {
+            keys.iter()
+                .find_map(|key| {
+                    let value = get_f32(key);
+                    if value == 0.0 {
+                        None
+                    } else {
+                        Some(value)
+                    }
+                })
+                .unwrap_or(0.0)
+        };
+
         let is_deepseek = arch_name.contains("deepseek");
 
-        // Try both architecture-specific and general prefixes for vocab size
-        let n_vocab = get_u32("llama.vocabulary_size");
+        let tokenizer_vocab = reader
+            .get("tokenizer.ggml.tokens")
+            .and_then(|value| match value {
+                barq_core::gguf::GgufValue::Array(tokens) => Some(tokens.len() as u32),
+                _ => None,
+            })
+            .unwrap_or(0);
+
+        // Try both architecture-specific and general prefixes for vocab size.
+        let n_vocab = get_u32_any(&[
+            "llama.vocabulary_size",
+            "qwen.vocabulary_size",
+            "qwen2.vocabulary_size",
+            "qwen3.vocabulary_size",
+            "deepseek.vocabulary_size",
+            "general.vocab_size",
+        ]);
         let n_vocab = if n_vocab == 0 {
-            let qwen_vocab = get_u32("qwen.vocabulary_size");
-            let qwen_vocab = if qwen_vocab == 0 && is_deepseek {
-                get_u32("deepseek.vocabulary_size")
+            if tokenizer_vocab > 0 {
+                tokenizer_vocab
+            } else if is_deepseek {
+                102400 // DeepSeek uses larger vocab
             } else {
-                qwen_vocab
-            };
-            if qwen_vocab == 0 {
-                reader
-                    .get("general.vocab_size")
-                    .and_then(|v| {
-                        if let barq_core::gguf::GgufValue::Uint32(u) = v {
-                            Some(*u)
-                        } else {
-                            None
-                        }
-                    })
-                    .unwrap_or(102400) // DeepSeek uses larger vocab
-            } else {
-                qwen_vocab
+                32000
             }
         } else {
             n_vocab
         };
 
         ModelHParams {
-            n_layer: {
-                let v = get_u32("llama.block_count");
-                let v = if v == 0 && is_qwen {
-                    get_u32("qwen.block_count")
-                } else {
-                    v
-                };
-                let v = if v == 0 && is_deepseek {
-                    get_u32("deepseek.block_count")
-                } else {
-                    v
-                };
-                if v == 0 {
-                    get_u32("general.n_layers")
-                } else {
-                    v
-                }
-            },
-            n_head: {
-                let v = get_u32("llama.attention.head_count");
-                let v = if v == 0 && is_qwen {
-                    get_u32("qwen.attention.head_count")
-                } else {
-                    v
-                };
-                let v = if v == 0 && is_deepseek {
-                    get_u32("deepseek.attention.head_count")
-                } else {
-                    v
-                };
-                if v == 0 {
-                    get_u32("general.n_head")
-                } else {
-                    v
-                }
-            },
+            n_layer: get_u32_any(&[
+                "llama.block_count",
+                "qwen.block_count",
+                "qwen2.block_count",
+                "qwen3.block_count",
+                "deepseek.block_count",
+                "general.n_layers",
+            ]),
+            n_head: get_u32_any(&[
+                "llama.attention.head_count",
+                "qwen.attention.head_count",
+                "qwen2.attention.head_count",
+                "qwen3.attention.head_count",
+                "deepseek.attention.head_count",
+                "general.n_head",
+            ]),
             n_head_kv: {
-                let v = get_u32("llama.attention.head_count_kv");
-                let v = if v == 0 && is_qwen {
-                    get_u32("qwen.attention.head_count_kv")
-                } else {
-                    v
-                };
-                let v = if v == 0 && is_deepseek {
-                    get_u32("deepseek.attention.head_count_kv")
-                } else {
-                    v
-                };
-                // If still 0, default to n_head (full attention)
+                let v = get_u32_any(&[
+                    "llama.attention.head_count_kv",
+                    "qwen.attention.head_count_kv",
+                    "qwen2.attention.head_count_kv",
+                    "qwen3.attention.head_count_kv",
+                    "deepseek.attention.head_count_kv",
+                ]);
+                // If still 0, default to full attention.
                 if v == 0 {
-                    get_u32("llama.attention.head_count")
+                    get_u32_any(&[
+                        "llama.attention.head_count",
+                        "qwen.attention.head_count",
+                        "qwen2.attention.head_count",
+                        "qwen3.attention.head_count",
+                        "deepseek.attention.head_count",
+                    ])
                 } else {
                     v
                 }
             },
-            n_embd: {
-                let v = get_u32("llama.embedding_length");
-                let v = if v == 0 && is_qwen {
-                    get_u32("qwen.embedding_length")
-                } else {
-                    v
-                };
-                let v = if v == 0 && is_deepseek {
-                    get_u32("deepseek.embedding_length")
-                } else {
-                    v
-                };
-                if v == 0 {
-                    get_u32("general.n_embd")
-                } else {
-                    v
-                }
-            },
-            n_ff: {
-                let v = get_u32("llama.feed_forward_length");
-                let v = if v == 0 && is_qwen {
-                    get_u32("qwen.intermediate_size")
-                } else {
-                    v
-                };
-                let v = if v == 0 && is_deepseek {
-                    get_u32("deepseek.intermediate_size")
-                } else {
-                    v
-                };
-                if v == 0 {
-                    get_u32("general.n_ff")
-                } else {
-                    v
-                }
-            },
+            n_embd: get_u32_any(&[
+                "llama.embedding_length",
+                "qwen.embedding_length",
+                "qwen2.embedding_length",
+                "qwen3.embedding_length",
+                "deepseek.embedding_length",
+                "general.n_embd",
+            ]),
+            n_ff: get_u32_any(&[
+                "llama.feed_forward_length",
+                "qwen.intermediate_size",
+                "qwen2.feed_forward_length",
+                "qwen2.intermediate_size",
+                "qwen3.intermediate_size",
+                "deepseek.intermediate_size",
+                "general.n_ff",
+            ]),
             n_vocab,
-            n_ctx_train: {
-                let v = get_u32("llama.context_length");
-                let v = if v == 0 && is_qwen {
-                    get_u32("qwen.context_length")
-                } else {
-                    v
-                };
-                let v = if v == 0 && is_deepseek {
-                    get_u32("deepseek.context_length")
-                } else {
-                    v
-                };
-                if v == 0 {
-                    get_u32("general.n_context")
-                } else {
-                    v
-                }
-            },
+            n_ctx_train: get_u32_any(&[
+                "llama.context_length",
+                "qwen.context_length",
+                "qwen2.context_length",
+                "qwen3.context_length",
+                "deepseek.context_length",
+                "general.n_context",
+            ]),
             rope_freq_base: {
-                let v = get_f32("llama.rope.freq_base");
-                let v = if v == 0.0 && is_qwen {
-                    get_f32("qwen.rope.freq_base")
-                } else {
-                    v
-                };
-                let v = if v == 0.0 && is_deepseek {
-                    get_f32("deepseek.rope.freq_base")
-                } else {
-                    v
-                };
+                let v = get_f32_any(&[
+                    "llama.rope.freq_base",
+                    "qwen.rope.freq_base",
+                    "qwen2.rope.freq_base",
+                    "qwen3.rope.freq_base",
+                    "deepseek.rope.freq_base",
+                ]);
                 // Qwen and DeepSeek use different RoPE bases
                 if v == 0.0 {
-                    if is_qwen {
-                        1000000.0
+                    if arch_name.contains("qwen") {
+                        1_000_000.0
                     } else if is_deepseek {
-                        10000.0 // DeepSeek uses standard base with Yarn scaling
+                        10_000.0 // DeepSeek uses standard base with Yarn scaling
                     } else {
-                        10000.0
+                        10_000.0
                     }
                 } else {
                     v
                 }
             },
             rope_freq_scale: {
-                let v = get_f32("llama.rope.freq_scale");
-                let v = if v == 0.0 && is_qwen {
-                    get_f32("qwen.rope.freq_scale")
-                } else {
-                    v
-                };
-                let v = if v == 0.0 && is_deepseek {
-                    get_f32("deepseek.rope.freq_scale")
-                } else {
-                    v
-                };
+                let v = get_f32_any(&[
+                    "llama.rope.freq_scale",
+                    "qwen.rope.freq_scale",
+                    "qwen2.rope.freq_scale",
+                    "qwen3.rope.freq_scale",
+                    "deepseek.rope.freq_scale",
+                ]);
                 if v == 0.0 {
                     1.0
                 } else {
                     v
                 }
             },
-            rope_scaling_type: {
-                let v = get_u32("llama.rope.scaling.type");
-                let v = if v == 0 && is_qwen {
-                    get_u32("qwen.rope.scaling.type")
-                } else {
-                    v
-                };
-                let v = if v == 0 && is_deepseek {
-                    get_u32("deepseek.rope.scaling.type")
-                } else {
-                    v
-                };
-                v
-            },
+            rope_scaling_type: get_u32_any(&[
+                "llama.rope.scaling.type",
+                "qwen.rope.scaling.type",
+                "qwen2.rope.scaling.type",
+                "qwen3.rope.scaling.type",
+                "deepseek.rope.scaling.type",
+            ]),
             ..Default::default()
         }
     }
@@ -592,15 +568,39 @@ mod tests {
                     "general.architecture",
                     GgufValue::String("qwen2".to_string()),
                 ),
-                ("general.vocab_size", GgufValue::Uint32(151_936)),
-                ("qwen.block_count", GgufValue::Uint32(28)),
-                ("qwen.attention.head_count", GgufValue::Uint32(40)),
-                ("qwen.attention.head_count_kv", GgufValue::Uint32(8)),
-                ("qwen.embedding_length", GgufValue::Uint32(5120)),
-                ("qwen.intermediate_size", GgufValue::Uint32(13_824)),
-                ("qwen.context_length", GgufValue::Uint32(32_768)),
-                ("qwen.rope.freq_base", GgufValue::Float32(1_000_000.0)),
-                ("qwen.rope.scaling.type", GgufValue::Uint32(1)),
+                ("qwen2.block_count", GgufValue::Uint32(28)),
+                ("qwen2.attention.head_count", GgufValue::Uint32(40)),
+                ("qwen2.attention.head_count_kv", GgufValue::Uint32(8)),
+                ("qwen2.embedding_length", GgufValue::Uint32(5120)),
+                ("qwen2.feed_forward_length", GgufValue::Uint32(13_824)),
+                ("qwen2.context_length", GgufValue::Uint32(32_768)),
+                ("qwen2.rope.freq_base", GgufValue::Float32(1_000_000.0)),
+                ("qwen2.rope.scaling.type", GgufValue::Uint32(1)),
+                (
+                    "tokenizer.ggml.tokens",
+                    GgufValue::Array(vec![
+                        GgufValue::String("<unk>".to_string()),
+                        GgufValue::String("hello".to_string()),
+                        GgufValue::String("world".to_string()),
+                        GgufValue::String("</s>".to_string()),
+                    ]),
+                ),
+                (
+                    "tokenizer.ggml.merges",
+                    GgufValue::Array(vec![
+                        GgufValue::String("h e".to_string()),
+                        GgufValue::String("he l".to_string()),
+                    ]),
+                ),
+                (
+                    "tokenizer.ggml.token_type",
+                    GgufValue::Array(vec![
+                        GgufValue::Int32(1),
+                        GgufValue::Int32(3),
+                        GgufValue::Int32(3),
+                        GgufValue::Int32(1),
+                    ]),
+                ),
             ],
         );
 
@@ -611,9 +611,40 @@ mod tests {
         assert_eq!(qwen2.hparams.n_head_kv, 8);
         assert_eq!(qwen2.hparams.n_embd, 5120);
         assert_eq!(qwen2.hparams.n_ff, 13_824);
-        assert_eq!(qwen2.hparams.n_vocab, 151_936);
+        assert_eq!(qwen2.hparams.n_vocab, 4);
         assert_eq!(qwen2.hparams.n_ctx_train, 32_768);
         assert_eq!(qwen2.hparams.rope_scaling_type, 1);
+        let expected_tokens = serde_json::to_string(&vec![
+            "<unk>".to_string(),
+            "hello".to_string(),
+            "world".to_string(),
+            "</s>".to_string(),
+        ])
+        .unwrap();
+        let expected_merges =
+            serde_json::to_string(&vec!["h e".to_string(), "he l".to_string()]).unwrap();
+        let expected_token_types = serde_json::to_string(&vec![1_i32, 3, 3, 1]).unwrap();
+        assert_eq!(
+            qwen2
+                .metadata()
+                .get("tokenizer.ggml.tokens")
+                .map(|s| s.as_str()),
+            Some(expected_tokens.as_str())
+        );
+        assert_eq!(
+            qwen2
+                .metadata()
+                .get("tokenizer.ggml.merges")
+                .map(|s| s.as_str()),
+            Some(expected_merges.as_str())
+        );
+        assert_eq!(
+            qwen2
+                .metadata()
+                .get("tokenizer.ggml.token_type")
+                .map(|s| s.as_str()),
+            Some(expected_token_types.as_str())
+        );
 
         let qwen3_path = write_test_gguf_file(
             "qwen3",
