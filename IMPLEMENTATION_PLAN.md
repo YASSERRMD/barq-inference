@@ -316,25 +316,25 @@ This plan addresses the gaps identified in `GAP_ANALYSIS.md` through focused, at
 **Goal:** Production-ready documentation.
 
 ### Phase 27.1: API Documentation
-- [ ] Document all public APIs
-- [ ] Add rustdoc examples
-- [ ] Add architecture diagrams
-- [ ] Document quantization choices
-- [ ] Document backend options
+- [x] Document all public APIs
+- [x] Add rustdoc examples
+- [x] Add architecture diagrams
+- [x] Document quantization choices
+- [x] Document backend options
 
 ### Phase 27.2: User Documentation
-- [ ] Update README with all features
-- [ ] Create usage examples
-- [ ] Document CLI flags
-- [ ] Create migration guide from llama.cpp
-- [ ] Document performance tuning
+- [x] Update README with all features
+- [x] Create usage examples
+- [x] Document CLI flags
+- [x] Create migration guide from llama.cpp
+- [x] Document performance tuning
 
 ### Phase 27.3: Developer Documentation
-- [ ] Create CONTRIBUTING.md
-- [ ] Document architecture decisions
-- [ ] Create module diagrams
-- [ ] Document testing approach
-- [ ] Document release process
+- [x] Create CONTRIBUTING.md
+- [x] Document architecture decisions
+- [x] Create module diagrams
+- [x] Document testing approach
+- [x] Document release process
 
 ---
 
@@ -439,9 +439,9 @@ Each phase.X.Y gets its own branch, commits are atomic, and branches are pushed 
 | 25.3 | Done | phase_25_testing_infra | Benchmarks |
 | 26.1 | Done | phase_26_multimodal_foundation | Vision encoder |
 | 26.2 | Done | phase_26_multimodal_foundation | VL models |
-| 27.1 | Pending | - | API docs |
-| 27.2 | Pending | - | User docs |
-| 27.3 | Pending | - | Dev docs |
+| 27.1 | Done | phase_27_docs_polish | API docs |
+| 27.2 | Done | phase_27_docs_polish | User docs |
+| 27.3 | Done | phase_27_docs_polish | Dev docs |
 
 ---
 

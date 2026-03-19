@@ -54,7 +54,7 @@ impl Default for ModelHParams {
     }
 }
 
-/// Model loaded from GGUF file
+/// Model loaded from a GGUF file.
 #[derive(Clone)]
 pub struct Model {
     /// Model architecture
@@ -70,7 +70,20 @@ pub struct Model {
 }
 
 impl Model {
-    /// Load a model from a GGUF file
+    /// Load a model from a GGUF file.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use models::loader::Model;
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    ///     let model = Model::load("path/to/model.gguf").await?;
+    ///     println!("loaded {:?}", model.arch());
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn load<P: AsRef<Path>>(path: P) -> Result<Self> {
         let path_str = path.as_ref().to_string_lossy().to_string();
         let _file = File::open(&path_str).await.map_err(Error::Io)?;

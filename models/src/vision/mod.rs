@@ -7,6 +7,16 @@ use barq_core::error::{Error, Result};
 use barq_core::tensor::{Shape, Tensor, TensorData, TensorType};
 
 /// Raw RGB image input.
+///
+/// # Example
+///
+/// ```rust
+/// use models::ImageInput;
+///
+/// let image = ImageInput::solid_rgb(2, 2, [255, 0, 0]);
+/// assert_eq!(image.width, 2);
+/// assert_eq!(image.pixels.len(), 12);
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImageInput {
     pub width: usize,
@@ -15,6 +25,16 @@ pub struct ImageInput {
 }
 
 impl ImageInput {
+    /// Build an RGB image from raw bytes.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use models::ImageInput;
+    ///
+    /// let image = ImageInput::new(1, 1, vec![0, 128, 255]).unwrap();
+    /// assert_eq!(image.height, 1);
+    /// ```
     pub fn new(width: usize, height: usize, pixels: Vec<u8>) -> Result<Self> {
         let expected = width
             .checked_mul(height)
@@ -35,6 +55,16 @@ impl ImageInput {
         })
     }
 
+    /// Create a solid-color RGB image.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use models::ImageInput;
+    ///
+    /// let image = ImageInput::solid_rgb(2, 1, [1, 2, 3]);
+    /// assert_eq!(image.pixels, vec![1, 2, 3, 1, 2, 3]);
+    /// ```
     pub fn solid_rgb(width: usize, height: usize, rgb: [u8; 3]) -> Self {
         let mut pixels = Vec::with_capacity(width * height * 3);
         for _ in 0..(width * height) {
@@ -48,6 +78,18 @@ impl ImageInput {
         }
     }
 
+    /// Resize the image with nearest-neighbor sampling.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use models::ImageInput;
+    ///
+    /// let image = ImageInput::solid_rgb(1, 1, [7, 8, 9]);
+    /// let resized = image.resize_nearest(2, 2).unwrap();
+    /// assert_eq!(resized.width, 2);
+    /// assert_eq!(resized.height, 2);
+    /// ```
     pub fn resize_nearest(&self, target_width: usize, target_height: usize) -> Result<Self> {
         if target_width == 0 || target_height == 0 {
             return Err(Error::tensor("image dimensions must be non-zero"));
@@ -74,6 +116,7 @@ impl ImageInput {
         })
     }
 
+    /// Convert the image bytes to normalized floating-point values.
     pub fn normalize(&self) -> Vec<f32> {
         self.pixels
             .iter()
@@ -83,6 +126,17 @@ impl ImageInput {
 }
 
 /// Shared preprocessing options for vision encoders.
+///
+/// # Example
+///
+/// ```rust
+/// use models::{ImageInput, ImagePreprocessor};
+///
+/// let image = ImageInput::solid_rgb(2, 2, [255, 0, 0]);
+/// let preprocessor = ImagePreprocessor::new(1, 1, true);
+/// let pixels = preprocessor.preprocess(&image).unwrap();
+/// assert_eq!(pixels.len(), 3);
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ImagePreprocessor {
     pub target_width: usize,
@@ -91,6 +145,7 @@ pub struct ImagePreprocessor {
 }
 
 impl ImagePreprocessor {
+    /// Create a new image preprocessor.
     pub fn new(target_width: usize, target_height: usize, normalize: bool) -> Self {
         Self {
             target_width,
@@ -99,6 +154,7 @@ impl ImagePreprocessor {
         }
     }
 
+    /// Resize and optionally normalize an image into a flat float buffer.
     pub fn preprocess(&self, image: &ImageInput) -> Result<Vec<f32>> {
         let resized = image.resize_nearest(self.target_width, self.target_height)?;
         Ok(if self.normalize {
@@ -110,6 +166,8 @@ impl ImagePreprocessor {
 }
 
 /// Vision encoder interface.
+///
+/// Implementations convert an [`ImageInput`] into patch embeddings.
 pub trait VisionEncoder: Send + Sync {
     fn image_size(&self) -> (usize, usize);
     fn patch_size(&self) -> usize;
@@ -119,6 +177,17 @@ pub trait VisionEncoder: Send + Sync {
 }
 
 /// A deterministic CLIP-like vision encoder used for multimodal scaffolding.
+///
+/// # Example
+///
+/// ```rust
+/// use models::vision::{ClipVisionEncoder, ImageInput, VisionEncoder};
+///
+/// let encoder = ClipVisionEncoder::new((224, 224), 16, 768);
+/// let image = ImageInput::solid_rgb(224, 224, [0, 255, 0]);
+/// let embeddings = encoder.encode(&image).unwrap();
+/// assert_eq!(embeddings.shape().dims()[1], 768);
+/// ```
 #[derive(Debug, Clone)]
 pub struct ClipVisionEncoder {
     preprocessor: ImagePreprocessor,
@@ -127,6 +196,7 @@ pub struct ClipVisionEncoder {
 }
 
 impl ClipVisionEncoder {
+    /// Create a CLIP-like encoder with a fixed image size and patch layout.
     pub fn new(image_size: (usize, usize), patch_size: usize, embedding_dim: usize) -> Self {
         Self {
             preprocessor: ImagePreprocessor::new(image_size.0, image_size.1, true),

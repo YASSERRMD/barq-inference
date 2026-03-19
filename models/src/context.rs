@@ -10,7 +10,16 @@ use crate::loader::Model;
 use barq_core::error::{Error, Result};
 use barq_core::tensor::Tensor;
 
-/// Inference context parameters
+/// Inference context parameters.
+///
+/// # Example
+///
+/// ```rust
+/// use models::context::ContextParams;
+///
+/// let params = ContextParams::gpu_optimized();
+/// assert!(params.flash_attn);
+/// ```
 #[derive(Debug, Clone)]
 pub struct ContextParams {
     /// Context size (0 = use model default)
@@ -72,7 +81,7 @@ impl Default for ContextParams {
 }
 
 impl ContextParams {
-    /// Create optimized parameters for GPU inference
+    /// Create optimized parameters for GPU inference.
     pub fn gpu_optimized() -> Self {
         Self {
             n_threads: 4, // CPU is bottleneck, not compute
@@ -86,7 +95,14 @@ impl ContextParams {
         }
     }
 
-    /// Create optimized parameters for CPU inference
+    /// Create optimized parameters for CPU inference.
+    ///
+    /// ```rust
+    /// use models::context::ContextParams;
+    ///
+    /// let params = ContextParams::cpu_optimized();
+    /// assert_eq!(params.n_gpu_layers, 0);
+    /// ```
     pub fn cpu_optimized() -> Self {
         Self {
             n_threads: num_cpus::get_physical() as u32,
@@ -99,7 +115,7 @@ impl ContextParams {
         }
     }
 
-    /// Create parameters for maximum quality (Q8_0 quantization)
+    /// Create parameters for maximum quality (Q8_0 quantization).
     pub fn quality() -> Self {
         Self {
             type_k: 1, // Q8_0
@@ -109,7 +125,7 @@ impl ContextParams {
         }
     }
 
-    /// Create parameters for maximum speed (IQ4_XS quantization)
+    /// Create parameters for maximum speed (IQ4_XS quantization).
     pub fn speed() -> Self {
         Self {
             type_k: 0, // Q4_0 for even more compression
@@ -170,7 +186,24 @@ impl Batch {
     }
 }
 
-/// Inference context
+/// Inference context.
+///
+/// # Example
+///
+/// ```no_run
+/// use std::sync::Arc;
+/// use models::context::{ContextParams, ModelContext};
+/// use models::loader::Model;
+/// use models::transformer::LlamaTransformer;
+///
+/// # async fn demo() -> Result<(), Box<dyn std::error::Error>> {
+/// let model = Arc::new(Model::load("model.gguf").await?);
+/// let transformer = Arc::new(LlamaTransformer::new(model.clone())?);
+/// let ctx = ModelContext::new(model, ContextParams::default(), transformer)?;
+/// # let _ = ctx;
+/// # Ok(())
+/// # }
+/// ```
 pub struct ModelContext {
     /// Model reference
     model: Arc<Model>,
@@ -283,7 +316,7 @@ impl KVCache {
 }
 
 impl ModelContext {
-    /// Create a new inference context
+    /// Create a new inference context.
     pub fn new(
         model: Arc<Model>,
         params: ContextParams,
@@ -308,7 +341,22 @@ impl ModelContext {
         })
     }
 
-    /// Create context with default parameters
+    /// Create context with default parameters.
+    ///
+    /// ```no_run
+    /// use std::sync::Arc;
+    /// use models::context::{ContextParams, ModelContext};
+    /// use models::loader::Model;
+    /// use models::transformer::LlamaTransformer;
+    ///
+    /// # async fn demo() -> Result<(), Box<dyn std::error::Error>> {
+    /// let model = Arc::new(Model::load("model.gguf").await?);
+    /// let transformer = Arc::new(LlamaTransformer::new(model.clone())?);
+    /// let ctx = ModelContext::with_model(model, transformer)?;
+    /// # let _ = ctx;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn with_model(
         model: Arc<Model>,
         transformer: Arc<crate::transformer::LlamaTransformer>,
