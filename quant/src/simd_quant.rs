@@ -3,6 +3,7 @@
 //! This module provides accelerated dequantization using SIMD intrinsics
 
 use barq_core::error::Result;
+use barq_core::simd::SimdLevel;
 
 /// Dequantize Q4_0 block using SIMD
 ///
@@ -13,12 +14,14 @@ pub fn dequantize_q4_0_simd(
     block_size: usize,
     output: &mut [f32],
 ) -> Result<()> {
+    let simd_level = SimdLevel::detect();
+
     #[cfg(target_arch = "x86_64")]
     {
-        use std::arch::x86_64::*;
-
         unsafe {
-            if is_x86_feature_detected!("avx2") {
+            if simd_level == SimdLevel::AVX512 && is_x86_feature_detected!("avx512f") {
+                return dequantize_q4_0_avx512(quants, scales, block_size, output);
+            } else if simd_level == SimdLevel::AVX2 && is_x86_feature_detected!("avx2") {
                 return dequantize_q4_0_avx2(quants, scales, block_size, output);
             }
         }
@@ -27,7 +30,9 @@ pub fn dequantize_q4_0_simd(
     #[cfg(target_arch = "aarch64")]
     {
         unsafe {
-            return dequantize_q4_0_neon(quants, scales, block_size, output);
+            if simd_level == SimdLevel::NEON {
+                return dequantize_q4_0_neon(quants, scales, block_size, output);
+            }
         }
     }
 
@@ -59,6 +64,68 @@ fn dequantize_q4_0_scalar(
                 let q = if q >= 8 { q - 16 } else { q };
                 output[i] = q as f32 * scale;
             }
+        }
+
+        q_offset += block_size.div_ceil(2);
+    }
+
+    Ok(())
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx512f")]
+unsafe fn dequantize_q4_0_avx512(
+    quants: &[u8],
+    scales: &[f32],
+    block_size: usize,
+    output: &mut [f32],
+) -> Result<()> {
+    use std::arch::x86_64::*;
+
+    let n_blocks = scales.len();
+    let mut q_offset = 0;
+
+    for block_idx in 0..n_blocks {
+        let scale = scales[block_idx];
+        let start = block_idx * block_size;
+        let end = (start + block_size).min(output.len());
+
+        let scale_vec = _mm512_set1_ps(scale);
+
+        let mut i = start;
+        while i + 16 <= end {
+            let mut deq_vals = [0.0f32; 16];
+
+            for j in 0..16 {
+                let rel_idx = (i + j) - start;
+                let byte_idx = rel_idx / 2;
+                let shift = if rel_idx.is_multiple_of(2) { 0 } else { 4 };
+
+                if q_offset + byte_idx < quants.len() {
+                    let q = ((quants[q_offset + byte_idx] >> shift) & 0x0F) as i8;
+                    let q = if q >= 8 { q - 16 } else { q };
+                    deq_vals[j] = q as f32;
+                }
+            }
+
+            let vals = _mm512_loadu_ps(deq_vals.as_ptr());
+            let result = _mm512_mul_ps(vals, scale_vec);
+            _mm512_storeu_ps(output.as_mut_ptr().add(i), result);
+
+            i += 16;
+        }
+
+        while i < end {
+            let rel_idx = i - start;
+            let byte_idx = rel_idx / 2;
+            let shift = if rel_idx.is_multiple_of(2) { 0 } else { 4 };
+
+            if q_offset + byte_idx < quants.len() {
+                let q = ((quants[q_offset + byte_idx] >> shift) & 0x0F) as i8;
+                let q = if q >= 8 { q - 16 } else { q };
+                output[i] = q as f32 * scale;
+            }
+            i += 1;
         }
 
         q_offset += block_size.div_ceil(2);
@@ -283,5 +350,46 @@ mod tests {
         for i in block_size..2 * block_size {
             assert_eq!(output[i], -4.0);
         }
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn benchmark_dequantize_q4_0_avx512_vs_avx2() {
+        if !is_x86_feature_detected!("avx512f") || !is_x86_feature_detected!("avx2") {
+            return;
+        }
+
+        let block_size = 32;
+        let scales = vec![1.0f32; 256];
+        let n_blocks = scales.len();
+        let output_size = n_blocks * block_size;
+
+        let mut quants = Vec::new();
+        for _ in 0..n_blocks {
+            for _ in 0..block_size.div_ceil(2) {
+                quants.push(0x88);
+            }
+        }
+
+        let mut avx512_out = vec![0.0f32; output_size];
+        let mut avx2_out = vec![0.0f32; output_size];
+
+        let avx512_time = std::time::Instant::now();
+        unsafe {
+            dequantize_q4_0_avx512(&quants, &scales, block_size, &mut avx512_out).unwrap();
+        }
+        let avx512_elapsed = avx512_time.elapsed();
+
+        let avx2_time = std::time::Instant::now();
+        unsafe {
+            dequantize_q4_0_avx2(&quants, &scales, block_size, &mut avx2_out).unwrap();
+        }
+        let avx2_elapsed = avx2_time.elapsed();
+
+        assert_eq!(avx512_out, avx2_out);
+        println!(
+            "Q4_0 dequantization: AVX512 {:?}, AVX2 {:?}",
+            avx512_elapsed, avx2_elapsed
+        );
     }
 }

@@ -440,6 +440,10 @@ impl ModelContext {
         top_k: i32,
         top_p: f32,
     ) -> Result<Vec<i32>> {
+        if tokens.is_empty() {
+            return Err(Error::tensor("Cannot generate from an empty prompt"));
+        }
+
         let mut output = Vec::new();
         let mut current_tokens = tokens.to_vec();
 

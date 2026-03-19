@@ -525,6 +525,13 @@ async fn cmd_benchmark(
     gen_length: usize,
 ) -> anyhow::Result<()> {
     use benchmark::{BenchmarkConfig, InferenceBenchmark};
+    use models::{
+        context::{Batch, ContextParams},
+        llama::LlamaModel,
+        loader::Model,
+    };
+    use std::sync::Arc;
+    use vocab::{GgufTokenizer, Tokenizer};
 
     info!("Benchmarking model: {:?}", model);
     info!("Iterations: {}", iterations);
@@ -541,16 +548,86 @@ async fn cmd_benchmark(
     };
 
     let bench = InferenceBenchmark::with_config(config.clone());
+    let model_arc = Arc::new(Model::load(&model).await?);
+    let llama_model = Arc::new(LlamaModel::new(model_arc.clone())?);
+    let tokenizer = Arc::new(GgufTokenizer::from_gguf(model_arc.metadata()));
+    let synthetic_prompt = std::iter::repeat("barq")
+        .take(prompt_length.max(1))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let context_params = ContextParams::cpu_optimized();
+    let temperature = 0.8f32;
+    let top_k = 40i32;
+    let top_p = 0.95f32;
+    let boxed_error = |msg: String| -> Box<dyn std::error::Error> {
+        Box::new(std::io::Error::new(std::io::ErrorKind::Other, msg))
+    };
 
-    // TODO: Implement actual inference function
-    // For now, use a mock that simulates inference
-    let result = bench.run(|| {
-        // Simulate inference time
-        let simulated_time = std::time::Duration::from_millis(100);
-        std::thread::sleep(simulated_time);
+    let result = bench.run({
+        let llama_model = Arc::clone(&llama_model);
+        let tokenizer = Arc::clone(&tokenizer);
+        let synthetic_prompt = synthetic_prompt.clone();
+        move || {
+            tokio::task::block_in_place(|| {
+                let handle = tokio::runtime::Handle::current();
+                let start = std::time::Instant::now();
 
-        let total_tokens = config.prompt_length + config.gen_length;
-        Ok((total_tokens, simulated_time))
+                let context = llama_model
+                    .create_context(context_params.clone())
+                    .map_err(|e| boxed_error(e.to_string()))?;
+
+                let tokenization_result = handle
+                    .block_on(tokenizer.tokenize(&synthetic_prompt, true))
+                    .map_err(|e| boxed_error(e.to_string()))?;
+
+                let prompt_tokens: Vec<i32> = tokenization_result
+                    .ids
+                    .iter()
+                    .map(|&id| id as i32)
+                    .collect();
+
+                if prompt_tokens.is_empty() {
+                    return Err(boxed_error(
+                        "Synthetic prompt tokenized to no tokens".to_string(),
+                    ));
+                }
+
+                let prompt_batch = Batch::from_tokens(&prompt_tokens);
+                let mut logits = handle
+                    .block_on(context.encode(&prompt_batch))
+                    .map_err(|e| boxed_error(e.to_string()))?;
+
+                let mut generated_tokens = 0usize;
+                let mut ttft = std::time::Duration::ZERO;
+
+                for _ in 0..gen_length {
+                    let token = context
+                        .sample(&logits, temperature, top_k, top_p)
+                        .map_err(|e| boxed_error(e.to_string()))?;
+
+                    generated_tokens += 1;
+
+                    if generated_tokens == 1 {
+                        ttft = start.elapsed();
+                    }
+
+                    if token == 0 || token == 2 {
+                        break;
+                    }
+
+                    logits = handle
+                        .block_on(context.decode(&Batch::single(token)))
+                        .map_err(|e| boxed_error(e.to_string()))?;
+                }
+
+                let total_time = start.elapsed();
+                Ok(benchmark::BenchmarkSample {
+                    total_tokens: prompt_tokens.len() + generated_tokens,
+                    total_time,
+                    ttft: if ttft.is_zero() { total_time } else { ttft },
+                })
+            })
+        }
     });
 
     result.print();
@@ -560,8 +637,18 @@ async fn cmd_benchmark(
 
 async fn cmd_info(model: PathBuf) -> anyhow::Result<()> {
     info!("Getting model info: {:?}", model);
+    use models::loader::Model;
 
-    // TODO: Implement actual model info extraction
+    let loaded = Model::load(&model).await?;
+    println!("\n=== Model Info ===");
+    println!("Architecture: {:?}", loaded.arch());
+    println!("Tensor count:  {}", loaded.tensor_count());
+    println!("Metadata keys: {}", loaded.metadata().len());
+    println!("Context size:  {}", loaded.hparams().n_ctx_train);
+    println!("Layers:        {}", loaded.hparams().n_layer);
+    println!("Embedding dim: {}", loaded.hparams().n_embd);
+    println!("Vocab size:    {}", loaded.hparams().n_vocab);
+    println!("==================\n");
 
     Ok(())
 }
@@ -576,7 +663,44 @@ async fn cmd_convert(
     info!("Quantization: {}", quantize);
     info!("Output type: {}", output_type);
 
-    // TODO: Implement actual model conversion
+    use quant::ik_quant::{quantize_model_ik, repack_model_cpu, IKQuantConfig, IKQuantType};
+
+    let input_str = input.to_string_lossy().to_string();
+    let output_str = output.to_string_lossy().to_string();
+    let quantize_lower = quantize.to_ascii_lowercase();
+
+    match quantize_lower.as_str() {
+        "q4_k_r4" => {
+            repack_model_cpu(&input_str, &output_str)?;
+        }
+        "iq4_ks" => {
+            quantize_model_ik(
+                &input_str,
+                &output_str,
+                &IKQuantConfig::new(IKQuantType::IQ4_KS),
+            )?;
+        }
+        "iq3_ks" => {
+            quantize_model_ik(
+                &input_str,
+                &output_str,
+                &IKQuantConfig::new(IKQuantType::IQ3_KS),
+            )?;
+        }
+        "iq2_ks" => {
+            quantize_model_ik(
+                &input_str,
+                &output_str,
+                &IKQuantConfig::new(IKQuantType::IQ2_KS),
+            )?;
+        }
+        other => {
+            return Err(anyhow::anyhow!(
+                "Unsupported quantization type '{}'. Supported: q4_k_r4, iq4_ks, iq3_ks, iq2_ks",
+                other
+            ));
+        }
+    }
 
     Ok(())
 }

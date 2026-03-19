@@ -197,6 +197,7 @@ dependencies = [
  "metal",
  "models",
  "num_cpus",
+ "quant",
  "sampling",
  "serde",
  "serde_json",

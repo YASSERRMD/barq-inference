@@ -7,6 +7,7 @@
 //! - Support for different data layouts
 
 use crate::error::Result;
+use rayon::prelude::*;
 
 /// GEMM configuration
 #[derive(Debug, Clone)]
@@ -121,6 +122,12 @@ pub fn gemm_f32_with_config(
         )));
     }
 
+    // Threaded execution takes priority over single-thread SIMD so the
+    // optimization flag behaves predictably.
+    if config.threaded {
+        return gemm_blocked_threaded_scalar(a, b, c, m, n, k, config);
+    }
+
     // Try SIMD implementation first
     if config.use_simd {
         #[cfg(target_arch = "x86_64")]
@@ -147,6 +154,64 @@ pub fn gemm_f32_with_config(
 
     // Fallback to blocked scalar implementation
     gemm_blocked_scalar(a, b, c, m, n, k, config)
+}
+
+fn pack_b_panel(b: &[f32], n: usize, kk: usize, k_end: usize, jj: usize, j_end: usize) -> Vec<f32> {
+    let panel_k = k_end - kk;
+    let panel_n = j_end - jj;
+    let mut packed = vec![0.0f32; panel_k * panel_n];
+
+    for (local_k, k_idx) in (kk..k_end).enumerate() {
+        let src = &b[k_idx * n + jj..k_idx * n + j_end];
+        let dst = &mut packed[local_k * panel_n..(local_k + 1) * panel_n];
+        dst.copy_from_slice(src);
+    }
+
+    packed
+}
+
+fn gemm_blocked_threaded_scalar(
+    a: &[f32],
+    b: &[f32],
+    c: &mut [f32],
+    m: usize,
+    n: usize,
+    k: usize,
+    config: &GEMMConfig,
+) -> Result<()> {
+    let block_size = config.block_size;
+
+    c.fill(0.0);
+
+    for jj in (0..n).step_by(block_size) {
+        let j_end = (jj + block_size).min(n);
+
+        for kk in (0..k).step_by(block_size) {
+            let k_end = (kk + block_size).min(k);
+            let packed_b = pack_b_panel(b, n, kk, k_end, jj, j_end);
+            let panel_n = j_end - jj;
+
+            c.par_chunks_mut(n).enumerate().for_each(|(i, row)| {
+                if i >= m {
+                    return;
+                }
+
+                let a_row = &a[i * k..(i + 1) * k];
+                let c_panel = &mut row[jj..j_end];
+
+                for (local_k, k_idx) in (kk..k_end).enumerate() {
+                    let a_val = a_row[k_idx];
+                    let b_row = &packed_b[local_k * panel_n..(local_k + 1) * panel_n];
+
+                    for j in 0..panel_n {
+                        c_panel[j] += a_val * b_row[j];
+                    }
+                }
+            });
+        }
+    }
+
+    Ok(())
 }
 
 /// Blocked GEMM with AVX-512 acceleration
@@ -486,6 +551,68 @@ mod tests {
         gemm_f32_with_config(&a, &b, &mut c, 2, 2, 2, &config).unwrap();
 
         assert!((c[0] - 19.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_gemm_threaded_matches_scalar() {
+        let a = vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let b = vec![7.0f32, 8.0, 9.0, 10.0, 11.0, 12.0];
+        let mut threaded = vec![0.0f32; 4];
+        let mut scalar = vec![0.0f32; 4];
+
+        let threaded_cfg = GEMMConfig::threaded();
+        let scalar_cfg = GEMMConfig {
+            use_simd: false,
+            threaded: false,
+            ..GEMMConfig::default()
+        };
+
+        gemm_f32_with_config(&a, &b, &mut threaded, 2, 2, 3, &threaded_cfg).unwrap();
+        gemm_f32_with_config(&a, &b, &mut scalar, 2, 2, 3, &scalar_cfg).unwrap();
+
+        assert_eq!(threaded, scalar);
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn benchmark_gemm_avx512_vs_avx2() {
+        if !is_x86_feature_detected!("avx512f") || !is_x86_feature_detected!("avx2") {
+            return;
+        }
+
+        let m = 32;
+        let n = 32;
+        let k = 32;
+        let a = vec![1.0f32; m * k];
+        let b = vec![0.5f32; k * n];
+        let config = GEMMConfig {
+            block_size: 16,
+            use_simd: true,
+            unroll: true,
+            cache_aware: true,
+            threaded: false,
+        };
+
+        let mut avx512 = vec![0.0f32; m * n];
+        let mut avx2 = vec![0.0f32; m * n];
+
+        let avx512_started = std::time::Instant::now();
+        unsafe {
+            gemm_avx512_blocked(&a, &b, &mut avx512, m, n, k, &config).unwrap();
+        }
+        let avx512_elapsed = avx512_started.elapsed();
+
+        let avx2_started = std::time::Instant::now();
+        unsafe {
+            gemm_avx2_blocked(&a, &b, &mut avx2, m, n, k, &config).unwrap();
+        }
+        let avx2_elapsed = avx2_started.elapsed();
+
+        assert_eq!(avx512, avx2);
+        println!(
+            "GEMM benchmark: AVX512 {:?}, AVX2 {:?}",
+            avx512_elapsed, avx2_elapsed
+        );
     }
 
     #[test]
