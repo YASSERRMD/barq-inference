@@ -32,6 +32,7 @@
 //! modern LLMs: SentencePiece, BPE, WordPiece, Unigram, and more.
 
 pub mod bpe;
+pub mod chat_template;
 pub mod gguf_tokenizer;
 pub mod prelude;
 pub mod spm;
@@ -41,6 +42,7 @@ pub mod vocab;
 pub mod wpm;
 
 pub use bpe::BpeTokenizer;
+pub use chat_template::{ChatMessage, ChatRole, ChatTemplate, ChatTemplatePreset};
 pub use gguf_tokenizer::GgufTokenizer;
 pub use spm::SentencePiece;
 pub use tokenizer::{Tokenizer, TokenizerType};
