@@ -43,7 +43,7 @@ blas-src = { version = "0.9", features = ["accelerate"], optional = true }
 blas = { version = "0.22", optional = true }
 
 # GPU dependencies (optional)
-cudarc = { version = "0.12", optional = true }
+cudarc = { version = "0.12", optional = true, features = ["cuda-11040"] }
 metal = { version = "0.28", optional = true }
 
 [build-dependencies]

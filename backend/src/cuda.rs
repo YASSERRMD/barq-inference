@@ -7,13 +7,17 @@
 //! - Multi-GPU support
 
 use barq_core::error::{Error, Result};
-use std::collections::HashMap;
 use std::sync::Arc;
 
 #[cfg(feature = "cuda")]
 use cudarc::{
-    driver::{safe::*, sys::*, CudaDevice, CudaStream},
-    nvrtc::{safe::Ptx, CompileError},
+    cublas::safe::CudaBlas,
+    driver::{
+        result,
+        safe::{CudaDevice, CudaFunction, CudaSlice, CudaStream, LaunchAsync},
+        sys,
+    },
+    nvrtc::safe::Ptx,
 };
 
 /// CUDA backend
@@ -23,12 +27,9 @@ pub struct CudaBackend {
     pub(crate) device: Arc<CudaDevice>,
     /// Device ID
     device_id: usize,
-    /// CUDA streams for concurrent execution
-    #[cfg(feature = "cuda")]
-    streams: HashMap<String, Arc<CudaStream>>,
     /// cuBLAS handle
     #[cfg(feature = "cuda")]
-    cublas_handle: Option<cudarc::cublas::safe::Cublas>,
+    cublas_handle: Option<CudaBlas>,
     /// Device properties
     props: CudaDeviceProps,
 }
@@ -60,41 +61,88 @@ impl CudaBackend {
         #[cfg(feature = "cuda")]
         {
             // Get CUDA device
-            let device = CudaDevice::new(device_id)
-                .map_err(|e| Error::backend(format!("Failed to initialize CUDA device: {}", e)))?;
-
-            // Get device properties
-            let props = unsafe {
-                let mut device_props: sys::CUdevice_prop = std::mem::zeroed();
-                sys::cuDeviceGetProperties(&mut device_props as *mut _, device_id as i32);
-                CudaDeviceProps {
-                    name: {
-                        let name_slice = &device_props.name;
-                        let null_pos = name_slice
-                            .iter()
-                            .position(|&x| x == 0)
-                            .unwrap_or(name_slice.len());
-                        String::from_utf8_lossy(&name_slice[..null_pos]).to_string()
-                    },
-                    compute_capability: (device_props.major, device_props.minor),
-                    total_memory: device_props.totalGlobalMem,
-                    multiprocessor_count: device_props.multiProcessorCount,
-                    max_threads_per_block: device_props.maxThreadsPerBlock,
-                    warp_size: device_props.warpSize,
-                    l2_cache_size: device_props.l2CacheSize,
-                    shared_mem_per_block: device_props.sharedMemPerBlock,
+            let device = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                CudaDevice::new(device_id)
+            })) {
+                Ok(Ok(device)) => device,
+                Ok(Err(e)) => {
+                    return Err(Error::backend(format!(
+                        "Failed to initialize CUDA device: {}",
+                        e
+                    )));
+                }
+                Err(_) => {
+                    return Err(Error::Unsupported("CUDA runtime not available".to_string()));
                 }
             };
 
+            let total_memory = unsafe { result::device::total_mem(*device.cu_device()) }
+                .map_err(|e| Error::backend(format!("Failed to query CUDA memory: {}", e)))?;
+
+            let props = CudaDeviceProps {
+                name: device
+                    .name()
+                    .map_err(|e| Error::backend(format!("Failed to query CUDA name: {}", e)))?,
+                compute_capability: (
+                    device
+                        .attribute(
+                            sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR,
+                        )
+                        .map_err(|e| {
+                            Error::backend(format!(
+                                "Failed to query CUDA compute capability major: {}",
+                                e
+                            ))
+                        })? as u32,
+                    device
+                        .attribute(
+                            sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR,
+                        )
+                        .map_err(|e| {
+                            Error::backend(format!(
+                                "Failed to query CUDA compute capability minor: {}",
+                                e
+                            ))
+                        })? as u32,
+                ),
+                total_memory,
+                multiprocessor_count: device
+                    .attribute(sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT)
+                    .map_err(|e| {
+                        Error::backend(format!("Failed to query CUDA multiprocessor count: {}", e))
+                    })? as u32,
+                max_threads_per_block: device
+                    .attribute(sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MAX_THREADS_PER_BLOCK)
+                    .map_err(|e| {
+                        Error::backend(format!("Failed to query CUDA max threads per block: {}", e))
+                    })? as u32,
+                warp_size: device
+                    .attribute(sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_WARP_SIZE)
+                    .map_err(|e| Error::backend(format!("Failed to query CUDA warp size: {}", e)))?
+                    as u32,
+                l2_cache_size: device
+                    .attribute(sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_L2_CACHE_SIZE)
+                    .map_err(|e| {
+                        Error::backend(format!("Failed to query CUDA L2 cache size: {}", e))
+                    })? as usize,
+                shared_mem_per_block: device
+                    .attribute(
+                        sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK,
+                    )
+                    .map_err(|e| {
+                        Error::backend(format!(
+                            "Failed to query CUDA shared memory per block: {}",
+                            e
+                        ))
+                    })? as usize,
+            };
+
             // Initialize cuBLAS
-            let cublas_handle = cudarc::cublas::safe::Cublas::new(device.clone())
-                .map(Some)
-                .unwrap_or(Ok(None))?;
+            let cublas_handle = CudaBlas::new(device.clone()).ok();
 
             Ok(Self {
                 device,
                 device_id,
-                streams: HashMap::new(),
                 cublas_handle,
                 props,
             })
@@ -119,8 +167,14 @@ impl CudaBackend {
     /// Get number of available CUDA devices
     #[cfg(feature = "cuda")]
     pub fn device_count() -> Result<usize> {
-        Ok(CudaDevice::count()
-            .map_err(|e| Error::backend(format!("Failed to get CUDA device count: {}", e)))?)
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(CudaDevice::count)) {
+            Ok(Ok(count)) => Ok(count as usize),
+            Ok(Err(e)) => Err(Error::backend(format!(
+                "Failed to get CUDA device count: {}",
+                e
+            ))),
+            Err(_) => Err(Error::Unsupported("CUDA runtime not available".to_string())),
+        }
     }
 
     /// Get number of available CUDA devices
@@ -132,30 +186,26 @@ impl CudaBackend {
     /// Create or get a CUDA stream
     #[cfg(feature = "cuda")]
     pub fn get_or_create_stream(&mut self, name: &str) -> Result<Arc<CudaStream>> {
-        if let Some(stream) = self.streams.get(name) {
-            return Ok(stream.clone());
-        }
-
+        let _ = name;
         let stream = self
             .device
             .fork_default_stream()
             .map_err(|e| Error::backend(format!("Failed to create CUDA stream: {}", e)))?;
 
-        self.streams.insert(name.to_string(), stream.clone());
-        Ok(stream)
+        Ok(Arc::new(stream))
     }
 
     /// Synchronize device
     #[cfg(feature = "cuda")]
     pub fn synchronize(&self) -> Result<()> {
         self.device
-            .wait()
+            .synchronize()
             .map_err(|e| Error::backend(format!("CUDA synchronization failed: {}", e)))
     }
 
     /// Get cuBLAS handle
     #[cfg(feature = "cuda")]
-    pub fn cublas_handle(&self) -> Option<&cudarc::cublas::safe::Cublas> {
+    pub fn cublas_handle(&self) -> Option<&CudaBlas> {
         self.cublas_handle.as_ref()
     }
 
@@ -194,7 +244,7 @@ impl CudaBackend {
 #[cfg(feature = "cuda")]
 pub struct CudaBuffer {
     /// Device buffer
-    pub buffer: cudarc::driver::safe::CudaDeviceSlice<u8>,
+    pub buffer: CudaSlice<u8>,
     /// Size in bytes
     pub size: usize,
 }
@@ -212,17 +262,19 @@ impl CudaBuffer {
 
     /// Copy data from host to device
     pub fn copy_from_host<T: Clone + Default>(
-        &self,
+        &mut self,
         device: &Arc<CudaDevice>,
         data: &[T],
     ) -> Result<()> {
-        let bytes = std::slice::from_raw_parts(
-            data.as_ptr() as *const u8,
-            data.len() * std::mem::size_of::<T>(),
-        );
+        let bytes = unsafe {
+            std::slice::from_raw_parts(
+                data.as_ptr() as *const u8,
+                data.len() * std::mem::size_of::<T>(),
+            )
+        };
 
         device
-            .htod_copy_sync(&self.buffer, bytes)
+            .htod_sync_copy_into(bytes, &mut self.buffer)
             .map_err(|e| Error::backend(format!("Failed to copy HtoD: {}", e)))
     }
 
@@ -240,44 +292,28 @@ impl CudaBuffer {
         };
 
         device
-            .dtoh_copy_sync(&self.buffer, bytes)
+            .dtoh_sync_copy_into(&self.buffer, bytes)
             .map_err(|e| Error::backend(format!("Failed to copy DtoH: {}", e)))
     }
 
     /// Asynchronously copy from host to device
     pub fn copy_from_host_async<T: Clone + Default>(
-        &self,
+        &mut self,
         device: &Arc<CudaDevice>,
-        stream: &CudaStream,
+        _stream: &CudaStream,
         data: &[T],
     ) -> Result<()> {
-        let bytes = std::slice::from_raw_parts(
-            data.as_ptr() as *const u8,
-            data.len() * std::mem::size_of::<T>(),
-        );
-
-        device
-            .htod_copy(&self.buffer, bytes, stream)
-            .map_err(|e| Error::backend(format!("Failed to async copy HtoD: {}", e)))
+        self.copy_from_host(device, data)
     }
 
     /// Asynchronously copy from device to host
     pub fn copy_to_host_async<T: Clone + Default>(
         &self,
         device: &Arc<CudaDevice>,
-        stream: &CudaStream,
+        _stream: &CudaStream,
         data: &mut [T],
     ) -> Result<()> {
-        let bytes = unsafe {
-            std::slice::from_raw_parts_mut(
-                data.as_mut_ptr() as *mut u8,
-                data.len() * std::mem::size_of::<T>(),
-            )
-        };
-
-        device
-            .dtoh_copy(&self.buffer, bytes, stream)
-            .map_err(|e| Error::backend(format!("Failed to async copy DtoH: {}", e)))
+        self.copy_to_host(device, data)
     }
 }
 
@@ -293,10 +329,21 @@ pub struct CudaKernel {
 #[cfg(feature = "cuda")]
 impl CudaKernel {
     /// Load kernel from PTX
-    pub fn from_ptx(device: &Arc<CudaDevice>, ptx: &Ptx, kernel_name: &str) -> Result<Self> {
-        let kernel = device
-            .load_ptx(ptx, kernel_name)
+    pub fn from_ptx(
+        device: &Arc<CudaDevice>,
+        ptx: &Ptx,
+        kernel_name: &'static str,
+    ) -> Result<Self> {
+        device
+            .load_ptx(ptx.clone(), kernel_name, &[kernel_name])
             .map_err(|e| Error::backend(format!("Failed to load PTX: {}", e)))?;
+
+        let kernel = device.get_func(kernel_name, kernel_name).ok_or_else(|| {
+            Error::backend(format!(
+                "Failed to retrieve CUDA function '{}' from module '{}'",
+                kernel_name, kernel_name
+            ))
+        })?;
 
         Ok(Self {
             kernel,
@@ -305,8 +352,11 @@ impl CudaKernel {
     }
 
     /// Launch kernel
-    pub fn launch(&self, cfg: LaunchConfig, params: &mut Vec<&[u8]>) -> Result<()> {
-        unsafe { self.device.launch_kernel(&self.kernel, cfg, params) }
+    pub fn launch<P>(&self, cfg: LaunchConfig, params: P) -> Result<()>
+    where
+        CudaFunction: LaunchAsync<P>,
+    {
+        unsafe { self.kernel.clone().launch(cfg.into(), params) }
             .map_err(|e| Error::backend(format!("Kernel launch failed: {}", e)))
     }
 }
@@ -367,6 +417,17 @@ impl LaunchConfig {
     pub fn with_shared_memory(mut self, bytes: u32) -> Self {
         self.shared_mem_bytes = bytes;
         self
+    }
+}
+
+#[cfg(feature = "cuda")]
+impl From<LaunchConfig> for cudarc::driver::safe::LaunchConfig {
+    fn from(value: LaunchConfig) -> Self {
+        Self {
+            grid_dim: value.grid_dim,
+            block_dim: value.block_dim,
+            shared_mem_bytes: value.shared_mem_bytes,
+        }
     }
 }
 

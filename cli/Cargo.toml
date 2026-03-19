@@ -31,7 +31,7 @@ indicatif = "0.17"
 console = "0.15"
 
 # GPU dependencies (optional)
-cudarc = { version = "0.12", optional = true }
+cudarc = { version = "0.12", optional = true, features = ["cuda-11040"] }
 metal = { version = "0.28", optional = true }
 
 # Internal crates

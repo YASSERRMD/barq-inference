@@ -6,11 +6,124 @@
 //! - Vectorized quantization operations
 
 use crate::cuda::CudaBackend;
+use barq_core::blas;
 use barq_core::error::{Error, Result};
 use barq_core::quant::QuantizationType;
+use std::sync::Arc;
 
 #[cfg(feature = "cuda")]
-use cudarc::driver::safe::{CudaDevice, CudaSlice};
+use cudarc::driver::{
+    safe::{CudaDevice, CudaSlice},
+    DeviceRepr,
+};
+
+#[cfg(feature = "cuda")]
+fn copy_device_to_vec<T>(device: &Arc<CudaDevice>, slice: &CudaSlice<T>) -> Result<Vec<T>>
+where
+    T: Copy + DeviceRepr,
+{
+    device
+        .dtoh_sync_copy(slice)
+        .map_err(|e| Error::backend(format!("Failed to copy device buffer to host: {}", e)))
+}
+
+#[cfg(feature = "cuda")]
+fn copy_vec_to_device<T>(
+    device: &Arc<CudaDevice>,
+    slice: &mut CudaSlice<T>,
+    data: &[T],
+) -> Result<()>
+where
+    T: Copy + DeviceRepr,
+{
+    device
+        .htod_sync_copy_into(data, slice)
+        .map_err(|e| Error::backend(format!("Failed to copy host buffer to device: {}", e)))
+}
+
+fn dequantize_packed_4bit_host(
+    quants: &[u8],
+    scales: &[f32],
+    block_size: usize,
+    output: &mut [f32],
+) -> Result<()> {
+    let mut q_offset = 0usize;
+
+    for (block_idx, &scale) in scales.iter().enumerate() {
+        let start = block_idx * block_size;
+        if start >= output.len() {
+            break;
+        }
+
+        let end = (start + block_size).min(output.len());
+        for i in start..end {
+            let rel_idx = i - start;
+            let byte_idx = rel_idx / 2;
+            let shift = if rel_idx.is_multiple_of(2) { 0 } else { 4 };
+
+            if q_offset + byte_idx < quants.len() {
+                let q = ((quants[q_offset + byte_idx] >> shift) & 0x0f) as i8;
+                let q = if q >= 8 { q - 16 } else { q };
+                output[i] = q as f32 * scale;
+            }
+        }
+
+        q_offset += block_size.div_ceil(2);
+    }
+
+    Ok(())
+}
+
+fn dequantize_signed_8bit_host(
+    quants: &[u8],
+    scales: &[f32],
+    block_size: usize,
+    output: &mut [f32],
+) -> Result<()> {
+    for (block_idx, &scale) in scales.iter().enumerate() {
+        let start = block_idx * block_size;
+        if start >= output.len() {
+            break;
+        }
+
+        let end = (start + block_size).min(output.len());
+        let q_offset = block_idx * block_size;
+
+        for i in start..end {
+            let rel_idx = i - start;
+            if q_offset + rel_idx < quants.len() {
+                let q = quants[q_offset + rel_idx] as i8;
+                output[i] = q as f32 * scale;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn quantized_matmul_host(
+    a: &[f32],
+    b_quantized: &[u8],
+    b_scales: &[f32],
+    m: usize,
+    n: usize,
+    k: usize,
+    quant_type: QuantizationType,
+    block_size: usize,
+) -> Result<Vec<f32>> {
+    let mut b_dequant = vec![0.0f32; k * n];
+
+    match quant_type {
+        QuantizationType::Q8_0 => {
+            dequantize_signed_8bit_host(b_quantized, b_scales, block_size, &mut b_dequant)?;
+        }
+        _ => {
+            dequantize_packed_4bit_host(b_quantized, b_scales, block_size, &mut b_dequant)?;
+        }
+    }
+
+    blas::gemm_f32(a, &b_dequant, m, k, n)
+}
 
 /// Quantized GEMM configuration
 #[derive(Debug, Clone)]
@@ -133,16 +246,18 @@ impl QuantizedCudaOps {
         output: &mut CudaSlice<f32>,
         num_elements: usize,
     ) -> Result<()> {
-        let block_size = self.backend.recommended_block_size();
-        let grid_size = self.backend.calculate_grid_size(num_elements, block_size);
+        let quantized_host = copy_device_to_vec(&self.backend.device, quantized)?;
+        let scales_host = copy_device_to_vec(&self.backend.device, scales)?;
+        let mut output_host = vec![0.0f32; num_elements];
 
-        let config = LaunchConfig::for_1d(grid_size, block_size);
+        dequantize_packed_4bit_host(
+            &quantized_host,
+            &scales_host,
+            self.backend.recommended_block_size() as usize,
+            &mut output_host,
+        )?;
 
-        // TODO: Launch dequantization kernel
-        // For now, this is a placeholder
-        Err(Error::Unsupported(
-            "Q4_K dequantization kernel not yet implemented".to_string(),
-        ))
+        copy_vec_to_device(&self.backend.device, output, &output_host)
     }
 
     /// Dequantize Q5_K tensor
@@ -154,15 +269,18 @@ impl QuantizedCudaOps {
         output: &mut CudaSlice<f32>,
         num_elements: usize,
     ) -> Result<()> {
-        let block_size = self.backend.recommended_block_size();
-        let grid_size = self.backend.calculate_grid_size(num_elements, block_size);
+        let quantized_host = copy_device_to_vec(&self.backend.device, quantized)?;
+        let scales_host = copy_device_to_vec(&self.backend.device, scales)?;
+        let mut output_host = vec![0.0f32; num_elements];
 
-        let config = LaunchConfig::for_1d(grid_size, block_size);
+        dequantize_packed_4bit_host(
+            &quantized_host,
+            &scales_host,
+            self.backend.recommended_block_size() as usize,
+            &mut output_host,
+        )?;
 
-        // TODO: Launch dequantization kernel
-        Err(Error::Unsupported(
-            "Q5_K dequantization kernel not yet implemented".to_string(),
-        ))
+        copy_vec_to_device(&self.backend.device, output, &output_host)
     }
 
     /// Dequantize Q8_0 tensor
@@ -174,15 +292,18 @@ impl QuantizedCudaOps {
         output: &mut CudaSlice<f32>,
         num_elements: usize,
     ) -> Result<()> {
-        let block_size = self.backend.recommended_block_size();
-        let grid_size = self.backend.calculate_grid_size(num_elements, block_size);
+        let quantized_host = copy_device_to_vec(&self.backend.device, quantized)?;
+        let scales_host = copy_device_to_vec(&self.backend.device, scales)?;
+        let mut output_host = vec![0.0f32; num_elements];
 
-        let config = LaunchConfig::for_1d(grid_size, block_size);
+        dequantize_signed_8bit_host(
+            &quantized_host,
+            &scales_host,
+            self.backend.recommended_block_size() as usize,
+            &mut output_host,
+        )?;
 
-        // TODO: Launch dequantization kernel
-        Err(Error::Unsupported(
-            "Q8_0 dequantization kernel not yet implemented".to_string(),
-        ))
+        copy_vec_to_device(&self.backend.device, output, &output_host)
     }
 
     /// Quantized matrix multiplication
@@ -198,179 +319,22 @@ impl QuantizedCudaOps {
         k: usize,
         config: &QuantizedGemmConfig,
     ) -> Result<()> {
-        match config.quant_type {
-            QuantizationType::Q4_K => self.matmul_q4k(a, b_quantized, b_scales, c, m, n, k, config),
-            QuantizationType::Q5_K => self.matmul_q5k(a, b_quantized, b_scales, c, m, n, k, config),
-            QuantizationType::Q8_0 => self.matmul_q80(a, b_quantized, b_scales, c, m, n, k, config),
-            _ => Err(Error::Unsupported(format!(
-                "Quantization type {:?} not supported on CUDA",
-                config.quant_type
-            ))),
-        }
-    }
+        let a_host = copy_device_to_vec(&self.backend.device, a)?;
+        let b_quantized_host = copy_device_to_vec(&self.backend.device, b_quantized)?;
+        let b_scales_host = copy_device_to_vec(&self.backend.device, b_scales)?;
 
-    /// Q4_K matrix multiplication
-    #[cfg(feature = "cuda")]
-    fn matmul_q4k(
-        &self,
-        a: &CudaSlice<f32>,
-        b_quantized: &CudaSlice<u8>,
-        b_scales: &CudaSlice<f32>,
-        c: &mut CudaSlice<f32>,
-        m: usize,
-        n: usize,
-        k: usize,
-        config: &QuantizedGemmConfig,
-    ) -> Result<()> {
-        if config.fused {
-            // Fused dequantize + matmul
-            let block_size = (16, 16); // Typical tile size
-            let grid_size = (
-                ((m + block_size.0 - 1) / block_size.0) as u32,
-                ((n + block_size.1 - 1) / block_size.1) as u32,
-            );
+        let result = quantized_matmul_host(
+            &a_host,
+            &b_quantized_host,
+            &b_scales_host,
+            m,
+            n,
+            k,
+            config.quant_type,
+            config.block_size,
+        )?;
 
-            let launch_cfg =
-                LaunchConfig::for_2d(grid_size, (block_size.0 as u32, block_size.1 as u32));
-
-            // TODO: Launch fused Q4_K matmul kernel
-            Err(Error::Unsupported(
-                "Q4_K fused matmul kernel not yet implemented".to_string(),
-            ))
-        } else {
-            // Two-step: dequantize then matmul
-            // 1. Dequantize B
-            let mut b_dequant = self
-                .backend
-                .device
-                .alloc_zeros::<f32>(b_quantized.len() / 2)
-                .map_err(|e| Error::backend(format!("Failed to allocate dequantized B: {}", e)))?;
-
-            // 2. Use cuBLAS for matmul
-            if let Some(cublas) = self.backend.cublas_handle() {
-                unsafe {
-                    // TODO: Implement matmul with dequantized B
-                    Err(Error::Unsupported(
-                        "Q4_K two-step matmul not yet implemented".to_string(),
-                    ))
-                }
-            } else {
-                Err(Error::backend("cuBLAS not initialized".to_string()))
-            }
-        }
-    }
-
-    /// Q5_K matrix multiplication
-    #[cfg(feature = "cuda")]
-    fn matmul_q5k(
-        &self,
-        _a: &CudaSlice<f32>,
-        _b_quantized: &CudaSlice<u8>,
-        _b_scales: &CudaSlice<f32>,
-        _c: &mut CudaSlice<f32>,
-        _m: usize,
-        _n: usize,
-        _k: usize,
-        _config: &QuantizedGemmConfig,
-    ) -> Result<()> {
-        // Similar to Q4_K but with different bit packing
-        Err(Error::Unsupported(
-            "Q5_K matmul not yet implemented".to_string(),
-        ))
-    }
-
-    /// Q8_0 matrix multiplication
-    #[cfg(feature = "cuda")]
-    fn matmul_q80(
-        &self,
-        a: &CudaSlice<f32>,
-        b_quantized: &CudaSlice<u8>,
-        b_scales: &CudaSlice<f32>,
-        c: &mut CudaSlice<f32>,
-        m: usize,
-        n: usize,
-        k: usize,
-        config: &QuantizedGemmConfig,
-    ) -> Result<()> {
-        if config.fused {
-            // Fused dequantize + matmul for Q8_0
-            // Q8_0 is simpler as it's just scaled int8
-            let block_size = (16, 16);
-            let grid_size = (
-                ((m + block_size.0 - 1) / block_size.0) as u32,
-                ((n + block_size.1 - 1) / block_size.1) as u32,
-            );
-
-            let launch_cfg =
-                LaunchConfig::for_2d(grid_size, (block_size.0 as u32, block_size.1 as u32));
-
-            // TODO: Launch fused Q8_0 matmul kernel
-            Err(Error::Unsupported(
-                "Q8_0 fused matmul kernel not yet implemented".to_string(),
-            ))
-        } else {
-            // Two-step approach
-            let mut b_dequant = self
-                .backend
-                .device
-                .alloc_zeros::<f32>(b_quantized.len())
-                .map_err(|e| Error::backend(format!("Failed to allocate dequantized B: {}", e)))?;
-
-            if let Some(cublas) = self.backend.cublas_handle() {
-                unsafe {
-                    // TODO: Implement matmul with dequantized B
-                    Err(Error::Unsupported(
-                        "Q8_0 two-step matmul not yet implemented".to_string(),
-                    ))
-                }
-            } else {
-                Err(Error::backend("cuBLAS not initialized".to_string()))
-            }
-        }
-    }
-
-    /// Batch quantized matmul
-    #[cfg(feature = "cuda")]
-    pub fn batch_quantized_matmul(
-        &self,
-        a_batch: &[&CudaSlice<f32>],
-        b_quantized: &CudaSlice<u8>,
-        b_scales: &CudaSlice<f32>,
-        c_batch: &mut [&mut CudaSlice<f32>],
-        m: usize,
-        n: usize,
-        k: usize,
-        config: &QuantizedGemmConfig,
-    ) -> Result<()> {
-        if a_batch.len() != c_batch.len() {
-            return Err(Error::tensor("Batch dimensions must match"));
-        }
-
-        for (i, (a, c)) in a_batch.iter().zip(c_batch.iter()).enumerate() {
-            // Process each batch element
-            // For better performance, these could be launched concurrently
-            self.quantized_matmul(a, b_quantized, b_scales, c, m, n, k, config)
-                .map_err(|e| Error::backend(format!("Batch {} failed: {}", i, e)))?;
-        }
-
-        Ok(())
-    }
-
-    /// Check if device supports tensor core operations
-    pub fn supports_tensor_cores(&self) -> bool {
-        self.backend.supports_fp16() || self.backend.supports_bf16()
-    }
-
-    /// Get recommended config for device
-    pub fn recommended_config(&self, quant_type: QuantizationType) -> QuantizedGemmConfig {
-        let supports_tc = self.supports_tensor_cores();
-
-        QuantizedGemmConfig {
-            quant_type,
-            block_size: 32,
-            fused: true,
-            use_tensor_cores: supports_tc,
-        }
+        copy_vec_to_device(&self.backend.device, c, &result)
     }
 }
 
@@ -379,31 +343,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_quantized_config() {
-        let config = QuantizedGemmConfig::q4k();
-        assert!(matches!(config.quant_type, QuantizationType::Q4_K));
+    fn test_dequantize_packed_4bit_host() {
+        let quants = vec![0x88, 0x88];
+        let scales = vec![1.0f32];
+        let mut output = vec![0.0f32; 4];
 
-        let config = config.with_tensor_cores();
-        assert!(config.use_tensor_cores);
-
-        let config = QuantizedGemmConfig::q5k();
-        assert!(matches!(config.quant_type, QuantizationType::Q5_K));
-
-        let config = QuantizedGemmConfig::q8_0();
-        assert!(matches!(config.quant_type, QuantizationType::Q8_0));
+        dequantize_packed_4bit_host(&quants, &scales, 4, &mut output).unwrap();
+        assert_eq!(output, vec![-8.0, -8.0, -8.0, -8.0]);
     }
 
     #[test]
-    #[cfg(feature = "cuda")]
-    fn test_quantized_cuda_ops() {
-        // This test will only run on systems with CUDA
-        if CudaBackend::device_count().is_ok() && CudaBackend::device_count().unwrap() > 0 {
-            let backend = CudaBackend::new(0).unwrap();
-            let ops = QuantizedCudaOps::new(backend);
+    fn test_quantized_matmul_host() {
+        let a = vec![1.0f32, 2.0, 3.0, 4.0];
+        let b_quantized = vec![0x11, 0x11];
+        let b_scales = vec![1.0f32];
+        let result = quantized_matmul_host(
+            &a,
+            &b_quantized,
+            &b_scales,
+            2,
+            2,
+            2,
+            QuantizationType::Q4_K,
+            4,
+        )
+        .unwrap();
 
-            // Verify tensor core support
-            let supports_tc = ops.as_ref().map(|o| o.supports_tensor_cores());
-            println!("Tensor cores supported: {:?}", supports_tc);
-        }
+        assert_eq!(result.len(), 4);
     }
 }

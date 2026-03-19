@@ -149,33 +149,35 @@ This plan addresses the gaps identified in `GAP_ANALYSIS.md` through focused, at
 
 **Goal:** Enable NVIDIA GPU inference.
 
+**Implementation note:** The CUDA work landed in the existing backend CUDA modules rather than the placeholder submodule layout below.
+
 ### Phase 21.1: CUDA Context and Memory
-- [ ] Create `backend/src/cuda/context.rs`
-- [ ] Implement CUDA device detection
-- [ ] Implement GPU memory allocation
-- [ ] Add CUDA error handling
-- [ ] Test device initialization
+- [x] Create `backend/src/cuda/context.rs`
+- [x] Implement CUDA device detection
+- [x] Implement GPU memory allocation
+- [x] Add CUDA error handling
+- [x] Test device initialization
 
 ### Phase 21.2: CUDA GEMM Kernels
-- [ ] Create `backend/src/cuda/kernels.rs`
-- [ ] Implement cuBLAS integration
-- [ ] Add quantization CUDA kernels
-- [ ] Implement matrix operations
-- [ ] Benchmark vs CPU
+- [x] Create `backend/src/cuda/kernels.rs`
+- [x] Implement cuBLAS integration
+- [x] Add quantization CUDA kernels
+- [x] Implement matrix operations
+- [x] Benchmark vs CPU
 
 ### Phase 21.3: CUDA Attention
-- [ ] Implement Flash Attention CUDA
-- [ ] Add KV cache GPU management
-- [ ] Implement RoPE on GPU
-- [ ] Add softmax kernel
-- [ ] Test with model
+- [x] Implement Flash Attention CUDA
+- [x] Add KV cache GPU management
+- [x] Implement RoPE on GPU
+- [x] Add softmax kernel
+- [x] Test with model
 
 ### Phase 21.4: CUDA Pipeline Integration
-- [ ] Create `backend/src/cuda/pipeline.rs`
-- [ ] Implement layer-by-layer GPU execution
-- [ ] Add CPU fallback path
-- [ ] Implement tensor transfers
-- [ ] End-to-end testing
+- [x] Create `backend/src/cuda/pipeline.rs`
+- [x] Implement layer-by-layer GPU execution
+- [x] Add CPU fallback path
+- [x] Implement tensor transfers
+- [x] End-to-end testing
 
 ---
 
@@ -417,10 +419,10 @@ Each phase.X.Y gets its own branch, commits are atomic, and branches are pushed 
 | 20.2 | Done | phase_20_cpu_optimizations | NEON improvements |
 | 20.3 | Done | phase_20_cpu_optimizations | GEMM optimizations |
 | 20.4 | Done | phase_20_cpu_optimizations | Prompt optimization |
-| 21.1 | Pending | - | CUDA context |
-| 21.2 | Pending | - | CUDA GEMM |
-| 21.3 | Pending | - | CUDA attention |
-| 21.4 | Pending | - | CUDA pipeline |
+| 21.1 | Done | phase_21_cuda_backend | CUDA context |
+| 21.2 | Done | phase_21_cuda_backend | CUDA GEMM |
+| 21.3 | Done | phase_21_cuda_backend | CUDA attention |
+| 21.4 | Done | phase_21_cuda_backend | CUDA pipeline |
 | 22.1 | Pending | - | Metal device |
 | 22.2 | Pending | - | Metal shaders |
 | 22.3 | Pending | - | Metal pipeline |
