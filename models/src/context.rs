@@ -157,6 +157,7 @@ impl Batch {
     /// Create a batch from token IDs
     pub fn from_tokens(tokens: &[i32]) -> Self {
         let n_tokens = tokens.len() as i32;
+        let logits_len = n_tokens.saturating_sub(1) as usize;
         Self {
             n_tokens,
             token: tokens.to_vec(),
@@ -164,7 +165,7 @@ impl Batch {
             pos: (0..n_tokens).collect(),
             n_seq_id: vec![1],
             seq_id: vec![vec![0]; n_tokens as usize],
-            logits: vec![0; n_tokens as usize - 1],
+            logits: vec![0; logits_len],
         }
     }
 }
