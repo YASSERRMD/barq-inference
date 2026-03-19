@@ -61,6 +61,8 @@ pub struct Model {
     pub arch: LlmArch,
     /// Hyperparameters
     pub hparams: ModelHParams,
+    /// Total number of tensors loaded from the GGUF file
+    tensor_count: usize,
     /// Tensors by name
     tensors: Arc<tokio::sync::RwLock<std::collections::HashMap<String, Tensor>>>,
     /// GGUF metadata
@@ -76,99 +78,102 @@ impl Model {
         // In production, this should be fully async
 
         // Use blocking task for file reading and tensor loading
-        let (arch, hparams, tensors, metadata) = tokio::task::spawn_blocking(move || {
-            // Open the GGUF file
-            let mut reader = GgufReader::open(&path_str)?;
+        let (arch, hparams, tensor_count, tensors, metadata) =
+            tokio::task::spawn_blocking(move || {
+                // Open the GGUF file
+                let mut reader = GgufReader::open(&path_str)?;
 
-            // Determine architecture from metadata
-            let arch = Self::detect_arch(&reader);
+                // Determine architecture from metadata
+                let arch = Self::detect_arch(&reader);
 
-            // Extract hyperparameters
-            let hparams = Self::extract_hparams(&reader);
+                // Extract hyperparameters
+                let hparams = Self::extract_hparams(&reader);
 
-            // Extract metadata
-            let mut metadata_map = std::collections::HashMap::new();
-            for (key, value) in reader.kv_pairs() {
-                use barq_core::gguf::GgufValue;
-                match value {
-                    GgufValue::String(s) => {
-                        metadata_map.insert(key.clone(), s.clone());
-                    }
-                    GgufValue::Uint32(u) => {
-                        metadata_map.insert(key.clone(), u.to_string());
-                    }
-                    GgufValue::Int32(i) => {
-                        metadata_map.insert(key.clone(), i.to_string());
-                    }
-                    GgufValue::Float32(f) => {
-                        metadata_map.insert(key.clone(), f.to_string());
-                    }
-                    GgufValue::Bool(b) => {
-                        metadata_map.insert(key.clone(), b.to_string());
-                    }
-                    // Handle arrays - especially tokenizer tokens
-                    GgufValue::Array(arr) => {
-                        if key == "tokenizer.ggml.tokens" {
-                            // Convert token array to JSON for storage
-                            let tokens: Vec<String> = arr
-                                .iter()
-                                .filter_map(|v| {
-                                    if let GgufValue::String(s) = v {
-                                        Some(s.clone())
-                                    } else {
-                                        None
-                                    }
-                                })
-                                .collect();
-                            if let Ok(json) = serde_json::to_string(&tokens) {
-                                metadata_map.insert(key.clone(), json);
+                // Extract metadata
+                let mut metadata_map = std::collections::HashMap::new();
+                for (key, value) in reader.kv_pairs() {
+                    use barq_core::gguf::GgufValue;
+                    match value {
+                        GgufValue::String(s) => {
+                            metadata_map.insert(key.clone(), s.clone());
+                        }
+                        GgufValue::Uint32(u) => {
+                            metadata_map.insert(key.clone(), u.to_string());
+                        }
+                        GgufValue::Int32(i) => {
+                            metadata_map.insert(key.clone(), i.to_string());
+                        }
+                        GgufValue::Float32(f) => {
+                            metadata_map.insert(key.clone(), f.to_string());
+                        }
+                        GgufValue::Bool(b) => {
+                            metadata_map.insert(key.clone(), b.to_string());
+                        }
+                        // Handle arrays - especially tokenizer tokens
+                        GgufValue::Array(arr) => {
+                            if key == "tokenizer.ggml.tokens" {
+                                // Convert token array to JSON for storage
+                                let tokens: Vec<String> = arr
+                                    .iter()
+                                    .filter_map(|v| {
+                                        if let GgufValue::String(s) = v {
+                                            Some(s.clone())
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                    .collect();
+                                if let Ok(json) = serde_json::to_string(&tokens) {
+                                    metadata_map.insert(key.clone(), json);
+                                }
+                            } else {
+                                // For other arrays, store count
+                                metadata_map
+                                    .insert(key.clone(), format!("[array; {} items]", arr.len()));
                             }
-                        } else {
-                            // For other arrays, store count
-                            metadata_map
-                                .insert(key.clone(), format!("[array; {} items]", arr.len()));
+                        }
+                        _ => {
+                            // Store other types as string representation
+                            metadata_map.insert(key.clone(), format!("{:?}", value));
                         }
                     }
-                    _ => {
-                        // Store other types as string representation
-                        metadata_map.insert(key.clone(), format!("{:?}", value));
+                }
+
+                // Load all tensors
+                let mut tensors_map = std::collections::HashMap::new();
+                let tensor_infos = reader.tensor_info().to_vec();
+
+                for info in &tensor_infos {
+                    match reader.load_tensor(&info.name) {
+                        Ok(tensor) => {
+                            tensors_map.insert(info.name.clone(), tensor);
+                        }
+                        Err(e) => {
+                            eprintln!("Warning: Failed to load tensor {}: {}", info.name, e);
+                        }
                     }
                 }
-            }
 
-            // Load all tensors
-            let mut tensors_map = std::collections::HashMap::new();
-            let tensor_infos = reader.tensor_info().to_vec();
+                Ok::<
+                    (
+                        LlmArch,
+                        ModelHParams,
+                        usize,
+                        std::collections::HashMap<String, Tensor>,
+                        std::collections::HashMap<String, String>,
+                    ),
+                    Error,
+                >((arch, hparams, tensors_map.len(), tensors_map, metadata_map))
+            })
+            .await
+            .map_err(|e| Error::Backend(format!("Failed to join task: {}", e)))??;
 
-            for info in &tensor_infos {
-                match reader.load_tensor(&info.name) {
-                    Ok(tensor) => {
-                        tensors_map.insert(info.name.clone(), tensor);
-                    }
-                    Err(e) => {
-                        eprintln!("Warning: Failed to load tensor {}: {}", info.name, e);
-                    }
-                }
-            }
-
-            Ok::<
-                (
-                    LlmArch,
-                    ModelHParams,
-                    std::collections::HashMap<String, Tensor>,
-                    std::collections::HashMap<String, String>,
-                ),
-                Error,
-            >((arch, hparams, tensors_map, metadata_map))
-        })
-        .await
-        .map_err(|e| Error::Backend(format!("Failed to join task: {}", e)))??;
-
-        println!("Loaded {} tensors from GGUF file", tensors.len());
+        println!("Loaded {} tensors from GGUF file", tensor_count);
 
         Ok(Self {
             arch,
             hparams,
+            tensor_count,
             tensors: Arc::new(tokio::sync::RwLock::new(tensors)),
             metadata: Arc::new(metadata),
         })
@@ -461,6 +466,11 @@ impl Model {
     /// Returns the hyperparameters
     pub fn hparams(&self) -> &ModelHParams {
         &self.hparams
+    }
+
+    /// Returns the number of tensors loaded into the model
+    pub fn tensor_count(&self) -> usize {
+        self.tensor_count
     }
 
     /// Returns metadata value
