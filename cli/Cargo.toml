@@ -48,6 +48,9 @@ sampling = { path = "../sampling" }
 advanced = { path = "../advanced" }
 quant = { path = "../quant" }
 
+[dev-dependencies]
+criterion = "0.5"
+
 [features]
 default = []
 cuda = ["dep:cudarc", "backend/cuda"]

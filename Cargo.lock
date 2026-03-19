@@ -192,6 +192,7 @@ dependencies = [
  "clap",
  "clap_complete",
  "console",
+ "criterion",
  "cudarc",
  "futures-util",
  "http-body-util",

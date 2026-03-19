@@ -26,5 +26,17 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
       - name: Test barq_core
         run: cargo test -p barq_core
+      - name: Test quant
+        run: cargo test -p quant
+      - name: Test vocab
+        run: cargo test -p vocab
+      - name: Test models
+        run: cargo test -p models
+      - name: Test sampling
+        run: cargo test -p sampling
       - name: Test advanced
         run: cargo test -p advanced
+      - name: Test cli
+        run: cargo test -p barq-inference
+      - name: Compile benches
+        run: cargo bench -p barq-inference --benches --no-run
