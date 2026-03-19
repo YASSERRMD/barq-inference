@@ -8,12 +8,29 @@ use barq_core::tensor::{Shape, Tensor, TensorData, TensorType};
 use std::sync::Arc;
 
 /// LLaVA multimodal model wrapper.
+///
+/// # Example
+///
+/// ```no_run
+/// use std::sync::Arc;
+/// use models::{loader::Model, LlavaModel};
+///
+/// # async fn demo() -> Result<(), Box<dyn std::error::Error>> {
+/// let model = Arc::new(Model::load("llava.gguf").await?);
+/// let wrapper = LlavaModel::new(model)?;
+/// let prompt = wrapper.insert_image_tokens("answer this", 2);
+/// assert!(prompt.contains("<image>"));
+/// # let _ = wrapper;
+/// # Ok(())
+/// # }
+/// ```
 pub struct LlavaModel {
     model: Arc<Model>,
     vision_encoder: ClipVisionEncoder,
 }
 
 impl LlavaModel {
+    /// Create an LLaVA wrapper around a loaded model.
     pub fn new(model: Arc<Model>) -> Result<Self> {
         if model.arch() != LlmArch::Llava {
             return Err(Error::Unsupported(format!(
@@ -36,10 +53,12 @@ impl LlavaModel {
         &self.vision_encoder
     }
 
+    /// Encode an image into patch embeddings.
     pub fn encode_image(&self, image: &ImageInput) -> Result<Tensor> {
         self.vision_encoder.encode(image)
     }
 
+    /// Insert one or more `<image>` tokens into a text prompt.
     pub fn insert_image_tokens(&self, prompt: &str, images: usize) -> String {
         if images == 0 {
             return prompt.to_string();
@@ -52,6 +71,7 @@ impl LlavaModel {
         format!("{} {}", prompt.trim_end(), image_tokens)
     }
 
+    /// Concatenate text and image embeddings along the sequence axis.
     pub fn fuse_text_and_image_embeddings(&self, text: &Tensor, image: &Tensor) -> Result<Tensor> {
         let text_dims = text.shape().dims();
         let image_dims = image.shape().dims();

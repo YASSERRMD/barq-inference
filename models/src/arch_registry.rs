@@ -343,7 +343,7 @@ impl LlmArchTrait for LlavaModel {
 pub struct ArchitectureRegistry;
 
 impl ArchitectureRegistry {
-    /// Create appropriate model wrapper based on architecture
+    /// Create appropriate model wrapper based on architecture.
     pub fn create_model(model: Arc<Model>) -> Result<Box<dyn LlmArchTrait>> {
         let arch = model.arch();
 
@@ -366,7 +366,7 @@ impl ArchitectureRegistry {
         }
     }
 
-    /// Get list of supported architectures
+    /// Get list of supported architectures.
     pub fn supported_architectures() -> Vec<LlmArch> {
         vec![
             LlmArch::Llama,
@@ -383,12 +383,20 @@ impl ArchitectureRegistry {
         ]
     }
 
-    /// Check if architecture is supported
+    /// Check if architecture is supported.
     pub fn is_supported(arch: LlmArch) -> bool {
         Self::supported_architectures().contains(&arch)
     }
 
-    /// Get architecture from GGUF architecture name string
+    /// Get architecture from a GGUF architecture name string.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use models::{ArchitectureRegistry, LlmArch};
+    ///
+    /// assert_eq!(ArchitectureRegistry::from_name("llava"), Some(LlmArch::Llava));
+    /// ```
     pub fn from_name(name: &str) -> Option<LlmArch> {
         match name.to_lowercase().as_str() {
             "llama" => Some(LlmArch::Llama),
@@ -406,7 +414,7 @@ impl ArchitectureRegistry {
         }
     }
 
-    /// Get architecture description
+    /// Get architecture description.
     pub fn describe(arch: LlmArch) -> &'static str {
         match arch {
             LlmArch::Llama => "LLaMA - Large Language Model Meta AI",
@@ -422,7 +430,7 @@ impl ArchitectureRegistry {
         }
     }
 
-    /// Get architecture capabilities
+    /// Get architecture capabilities.
     pub fn capabilities(arch: LlmArch) -> Vec<&'static str> {
         match arch {
             LlmArch::Llama => vec!["RoPE", "GQA"],
