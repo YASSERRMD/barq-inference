@@ -189,6 +189,20 @@ enum Commands {
         #[arg(short, long, default_value = "8080")]
         port: u16,
     },
+
+    /// Show Apple Metal / Apple Silicon capabilities (Phase 7.1)
+    MetalInfo {
+        /// Also show recommended ContextParams
+        #[arg(long)]
+        params: bool,
+    },
+
+    /// Show WASM/Candle runtime capabilities and recommended config (Phase 7.3)
+    WasmInfo {
+        /// Model size in billions of parameters (for quant recommendation)
+        #[arg(long, default_value = "7.0")]
+        model_params_b: f32,
+    },
 }
 
 #[tokio::main]
@@ -317,6 +331,10 @@ async fn main() -> anyhow::Result<()> {
         } => cmd_convert(input, output, quantize, output_type).await,
 
         Commands::Server { model, host, port } => cmd_server(model, host, port).await,
+
+        Commands::MetalInfo { params } => cmd_metal_info(params).await,
+
+        Commands::WasmInfo { model_params_b } => cmd_wasm_info(model_params_b).await,
     }
 }
 
@@ -742,6 +760,68 @@ async fn cmd_server_batch(model: PathBuf, host: String, port: u16) -> anyhow::Re
     let mut server = InferenceServer::with_handler(config, handler);
     info!("Continuous batching server ready.");
     server.start().await?;
+
+    Ok(())
+}
+
+// ── Phase 7.1/7.2: Metal info command ────────────────────────────────────────
+
+async fn cmd_metal_info(show_params: bool) -> anyhow::Result<()> {
+    use advanced::metal_backend_integration::{apply_metal_optimizations, print_report};
+    use models::context::ContextParams;
+
+    println!("Detecting Apple Metal / Silicon capabilities...\n");
+
+    let report = apply_metal_optimizations(ContextParams::default());
+    print_report(&report);
+
+    if show_params {
+        let p = &report.params;
+        println!("Recommended ContextParams:");
+        println!("  n_ctx:       {}", p.n_ctx);
+        println!("  n_threads:   {}", p.n_threads);
+        println!("  n_gpu_layers: {}", p.n_gpu_layers);
+        println!("  flash_attn:  {}", p.flash_attn);
+    }
+
+    println!("Inference score: {}/100", report.caps.inference_score());
+    if report.caps.should_offload_all_layers() {
+        println!("  ✓ Sufficient memory for full-GPU offload of 7B models");
+    }
+
+    Ok(())
+}
+
+// ── Phase 7.3: WASM info command ──────────────────────────────────────────────
+
+async fn cmd_wasm_info(model_params_b: f32) -> anyhow::Result<()> {
+    use advanced::wasm_candle::{best_wasm_quant, WasmRuntime};
+
+    println!("Detecting WASM/Candle runtime capabilities...\n");
+
+    let rt = WasmRuntime::auto();
+    rt.print_summary();
+
+    let caps = &rt.caps;
+    println!("Environment:");
+    println!("  SharedArrayBuffer: {}", caps.shared_array_buffer);
+    println!("  WASM SIMD:         {}", caps.wasm_simd);
+    println!("  WebGPU:            {}", caps.webgpu);
+
+    let heap_gb = if caps.usable_heap_bytes == usize::MAX {
+        16.0f32 // native — assume generous
+    } else {
+        caps.usable_heap_bytes as f32 / (1u64 << 30) as f32
+    };
+
+    let best_quant = best_wasm_quant(model_params_b, heap_gb);
+    println!(
+        "\nFor a {:.1}B parameter model on {:.1} GB heap:",
+        model_params_b, heap_gb
+    );
+    println!("  Recommended quantization: {:?}", best_quant);
+    println!("  Bits per weight: {:.2}", best_quant.bits_per_weight());
+    println!("  Browser safe: {}", best_quant.browser_safe());
 
     Ok(())
 }

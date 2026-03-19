@@ -35,6 +35,8 @@ pub mod benchmarks;
 pub mod continuous_batching;
 pub mod flash_attention;
 pub mod logging;
+pub mod metal_backend_integration;
+pub mod metal_detect;
 pub mod metrics;
 pub mod moe;
 pub mod paged_attention;
@@ -43,6 +45,7 @@ pub mod rope_scaling;
 pub mod speculative;
 pub mod tensor_parallel;
 pub mod uds_server;
+pub mod wasm_candle;
 // pub mod metrics_server;  // TODO: Fix hyper compatibility issues
 
 pub use batch_engine::{BatchEngine, BatchEngineHandle, BatchRequest};
