@@ -169,6 +169,11 @@ impl Vocab {
             .filter_map(|k| self.get_token(self.token_to_id[k]))
             .collect()
     }
+
+    /// Iterate over all tokens in the vocabulary.
+    pub fn iter(&self) -> impl Iterator<Item = &Token> {
+        self.id_to_token.values()
+    }
 }
 
 /// Tokenization result

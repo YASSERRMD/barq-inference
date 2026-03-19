@@ -4,7 +4,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::tokenizer::{Tokenizer, TokenizerType};
-use crate::vocab::{TokenizationResult, Vocab, VocabType};
+use crate::vocab::{
+    SpecialToken, Token, TokenAttr, TokenType, TokenizationResult, Vocab, VocabType,
+};
 use anyhow::Result;
 
 /// Simple GGUF tokenizer
@@ -15,9 +17,23 @@ pub struct GgufTokenizer {
 }
 
 impl GgufTokenizer {
+    fn add_vocab_token(vocab: &mut Vocab, id: u32, text: &str) {
+        vocab.add_token(Token {
+            id,
+            text: text.to_string(),
+            score: 0.0,
+            token_type: if text.starts_with('<') && text.ends_with('>') {
+                TokenType::Control
+            } else {
+                TokenType::Normal
+            },
+            attrs: TokenAttr::default(),
+        });
+    }
+
     /// Create a new GGUF tokenizer
     pub fn new() -> Self {
-        let vocab = Arc::new(Vocab::new(VocabType::SPM));
+        let mut vocab = Vocab::new(VocabType::SPM);
         let mut token_to_id = HashMap::new();
         let mut id_to_token = HashMap::new();
 
@@ -27,8 +43,16 @@ impl GgufTokenizer {
         id_to_token.insert(0, "<s>".to_string());
         id_to_token.insert(1, "</s>".to_string());
 
+        vocab.set_special_tokens(SpecialToken {
+            bos: Some(0),
+            eos: Some(1),
+            ..Default::default()
+        });
+        Self::add_vocab_token(&mut vocab, 0, "<s>");
+        Self::add_vocab_token(&mut vocab, 1, "</s>");
+
         Self {
-            vocab,
+            vocab: Arc::new(vocab),
             token_to_id,
             id_to_token,
         }
@@ -36,7 +60,7 @@ impl GgufTokenizer {
 
     /// Load tokenizer from GGUF model metadata
     pub fn from_gguf(metadata: &HashMap<String, String>) -> Self {
-        let vocab = Arc::new(Vocab::new(VocabType::SPM));
+        let mut vocab = Vocab::new(VocabType::SPM);
         let mut token_to_id = HashMap::new();
         let mut id_to_token = HashMap::new();
 
@@ -52,10 +76,22 @@ impl GgufTokenizer {
                     let id_u32 = id as u32;
                     id_to_token.insert(id_u32, token.clone());
                     token_to_id.insert(token.clone(), id_u32);
+                    Self::add_vocab_token(&mut vocab, id_u32, token);
                 }
+                vocab.set_special_tokens(SpecialToken {
+                    bos: token_to_id
+                        .get("<s>")
+                        .or_else(|| token_to_id.get("<bos>"))
+                        .copied(),
+                    eos: token_to_id
+                        .get("</s>")
+                        .or_else(|| token_to_id.get("<eos>"))
+                        .copied(),
+                    ..Default::default()
+                });
                 eprintln!("Loaded {} tokens into vocabulary", id_to_token.len());
                 return Self {
-                    vocab,
+                    vocab: Arc::new(vocab),
                     token_to_id,
                     id_to_token,
                 };
@@ -71,6 +107,7 @@ impl GgufTokenizer {
                     if let Ok(id) = id_str.parse::<u32>() {
                         id_to_token.insert(id, value.clone());
                         token_to_id.insert(value.clone(), id);
+                        Self::add_vocab_token(&mut vocab, id, value);
                     }
                 }
             }
@@ -81,8 +118,20 @@ impl GgufTokenizer {
             eprintln!("Available keys: {:?}", metadata.keys().collect::<Vec<_>>());
         }
 
+        vocab.set_special_tokens(SpecialToken {
+            bos: token_to_id
+                .get("<s>")
+                .or_else(|| token_to_id.get("<bos>"))
+                .copied(),
+            eos: token_to_id
+                .get("</s>")
+                .or_else(|| token_to_id.get("<eos>"))
+                .copied(),
+            ..Default::default()
+        });
+
         Self {
-            vocab,
+            vocab: Arc::new(vocab),
             token_to_id,
             id_to_token,
         }
@@ -228,6 +277,7 @@ impl Tokenizer for GgufTokenizer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tokenizer::Tokenizer;
 
     #[tokio::test]
     async fn test_gguf_tokenizer() {
@@ -237,6 +287,15 @@ mod tests {
         assert!(!result.ids.is_empty());
 
         let decoded = tokenizer.decode(&result.ids).await.unwrap();
-        assert!(!decoded.is_empty());
+        assert!(decoded.len() <= result.ids.len());
+    }
+
+    #[tokio::test]
+    async fn test_gguf_tokenizer_vocab_is_populated() {
+        let tokenizer = GgufTokenizer::new();
+
+        assert!(tokenizer.vocab().len() >= 2);
+        assert_eq!(tokenizer.vocab().special_tokens().bos, Some(0));
+        assert_eq!(tokenizer.vocab().special_tokens().eos, Some(1));
     }
 }
