@@ -200,6 +200,8 @@ impl Model {
                 "qwen2" => LlmArch::Qwen2,
                 "qwen2.moe" => LlmArch::Qwen2Moe,
                 "qwen3" => LlmArch::Qwen3,
+                "qwen2vl" | "qwen2.vl" | "qwen-vl" => LlmArch::Qwen2Vl,
+                "llava" | "llava-1.5" | "llava-1.6" => LlmArch::Llava,
                 "deepseek" => LlmArch::DeepSeek,
                 "deepseek.moe" => LlmArch::DeepSeekMoE,
                 "gemma" => LlmArch::Gemma,

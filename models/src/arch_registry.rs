@@ -6,11 +6,13 @@
 use crate::arch::LlmArch;
 use crate::deepseek::{DeepSeekMoEModel, DeepSeekModel};
 use crate::llama::LlamaModel;
+use crate::llava::LlavaModel;
 use crate::loader::Model;
 use crate::mistral::MistralModel;
 use crate::mixtral::MixtralModel;
 use crate::qwen::QwenModel;
 use crate::qwen2::{Qwen2MoEModel, Qwen2Model};
+use crate::qwen2vl::Qwen2VlModel;
 use crate::qwen3::Qwen3Model;
 use barq_core::error::{Error, Result};
 use std::sync::Arc;
@@ -45,6 +47,11 @@ pub trait LlmArchTrait: Send + Sync {
 
     /// Check if architecture supports RoPE scaling
     fn supports_rope_scaling(&self) -> bool {
+        false
+    }
+
+    /// Check if architecture supports vision inputs
+    fn supports_vision(&self) -> bool {
         false
     }
 
@@ -296,6 +303,42 @@ impl LlmArchTrait for DeepSeekMoEModel {
     }
 }
 
+impl LlmArchTrait for Qwen2VlModel {
+    fn arch(&self) -> LlmArch {
+        LlmArch::Qwen2Vl
+    }
+
+    fn model(&self) -> &Model {
+        self.inner()
+    }
+
+    fn supports_vision(&self) -> bool {
+        true
+    }
+
+    fn features(&self) -> Vec<&'static str> {
+        vec!["Vision", "Cross-Attention", "Image Tokens"]
+    }
+}
+
+impl LlmArchTrait for LlavaModel {
+    fn arch(&self) -> LlmArch {
+        LlmArch::Llava
+    }
+
+    fn model(&self) -> &Model {
+        self.inner()
+    }
+
+    fn supports_vision(&self) -> bool {
+        true
+    }
+
+    fn features(&self) -> Vec<&'static str> {
+        vec!["Vision", "Cross-Attention", "Image Tokens"]
+    }
+}
+
 /// Architecture registry for automatic model instantiation
 pub struct ArchitectureRegistry;
 
@@ -312,6 +355,8 @@ impl ArchitectureRegistry {
             LlmArch::Qwen2 => Ok(Box::new(Qwen2Model::new(model)?)),
             LlmArch::Qwen2Moe => Ok(Box::new(Qwen2MoEModel::new(model)?)),
             LlmArch::Qwen3 => Ok(Box::new(Qwen3Model::new(model)?)),
+            LlmArch::Qwen2Vl => Ok(Box::new(Qwen2VlModel::new(model)?)),
+            LlmArch::Llava => Ok(Box::new(LlavaModel::new(model)?)),
             LlmArch::DeepSeek => Ok(Box::new(DeepSeekModel::new(model)?)),
             LlmArch::DeepSeekMoE => Ok(Box::new(DeepSeekMoEModel::new(model)?)),
             _ => Err(Error::Unsupported(format!(
@@ -331,6 +376,8 @@ impl ArchitectureRegistry {
             LlmArch::Qwen2,
             LlmArch::Qwen2Moe,
             LlmArch::Qwen3,
+            LlmArch::Qwen2Vl,
+            LlmArch::Llava,
             LlmArch::DeepSeek,
             LlmArch::DeepSeekMoE,
         ]
@@ -351,6 +398,8 @@ impl ArchitectureRegistry {
             "qwen2" => Some(LlmArch::Qwen2),
             "qwen2.moe" | "qwen2moe" => Some(LlmArch::Qwen2Moe),
             "qwen3" => Some(LlmArch::Qwen3),
+            "qwen2vl" | "qwen2.vl" | "qwen-vl" => Some(LlmArch::Qwen2Vl),
+            "llava" | "llava-1.5" | "llava-1.6" => Some(LlmArch::Llava),
             "deepseek" => Some(LlmArch::DeepSeek),
             "deepseek.moe" | "deepseekmoe" => Some(LlmArch::DeepSeekMoE),
             _ => None,
@@ -428,6 +477,14 @@ mod tests {
             ArchitectureRegistry::from_name("deepseek.moe"),
             Some(LlmArch::DeepSeekMoE)
         );
+        assert_eq!(
+            ArchitectureRegistry::from_name("qwen2.vl"),
+            Some(LlmArch::Qwen2Vl)
+        );
+        assert_eq!(
+            ArchitectureRegistry::from_name("llava-1.6"),
+            Some(LlmArch::Llava)
+        );
         assert_eq!(ArchitectureRegistry::from_name("unknown"), None);
     }
 
@@ -440,6 +497,8 @@ mod tests {
         assert!(supported.contains(&LlmArch::Qwen));
         assert!(supported.contains(&LlmArch::Qwen2));
         assert!(supported.contains(&LlmArch::Qwen3));
+        assert!(supported.contains(&LlmArch::Qwen2Vl));
+        assert!(supported.contains(&LlmArch::Llava));
         assert!(supported.contains(&LlmArch::DeepSeek));
         assert!(supported.contains(&LlmArch::DeepSeekMoE));
     }
