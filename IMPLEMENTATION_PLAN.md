@@ -54,11 +54,11 @@ This plan addresses the gaps identified in `GAP_ANALYSIS.md` through focused, at
 **Goal:** Support the most commonly used model architectures.
 
 ### Phase 18.1: Qwen Architecture Family
-- [ ] Create `models/src/arch/qwen.rs` for Qwen base
-- [ ] Create `models/src/arch/qwen2.rs` for Qwen2
-- [ ] Create `models/src/arch/qwen3.rs` for Qwen3
-- [ ] Implement RoPE with NTK-aware scaling
-- [ ] Add GQA support for Qwen models
+- [x] Create `models/src/qwen.rs` for Qwen base
+- [x] Create `models/src/qwen2.rs` for Qwen2
+- [x] Create `models/src/qwen3.rs` for Qwen3
+- [x] Implement RoPE with NTK-aware scaling
+- [x] Add GQA support for Qwen models
 - [ ] Add test GGUF files
 
 ### Phase 18.2: DeepSeek Architecture
@@ -76,10 +76,10 @@ This plan addresses the gaps identified in `GAP_ANALYSIS.md` through focused, at
 - [ ] Add benchmarking
 
 ### Phase 18.4: Architecture Registry
-- [ ] Create `models/src/arch_registry.rs`
-- [ ] Map GGUF architecture names to implementations
-- [ ] Add architecture detection from metadata
-- [ ] Create unified `LlmArch` trait
+- [x] Create `models/src/arch_registry.rs`
+- [x] Map GGUF architecture names to implementations
+- [x] Add architecture detection from metadata
+- [x] Create unified `LlmArch` trait
 - [ ] Document all supported architectures
 
 ---
