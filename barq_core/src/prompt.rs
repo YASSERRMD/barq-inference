@@ -7,7 +7,7 @@
 
 use crate::error::{Error, Result};
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, Semaphore};
 
 /// Prompt processing cache
 pub struct PromptCache {
@@ -37,8 +37,11 @@ impl PromptCache {
 
     /// Get cached prompt if available
     pub async fn get(&self, key: &str) -> Option<Vec<u32>> {
-        let cache = self.cache.read().await;
-        cache.get(key).map(|cached| cached.tokens.clone())
+        let mut cache = self.cache.write().await;
+        cache.get_mut(key).map(|cached| {
+            cached.timestamp = std::time::Instant::now();
+            cached.tokens.clone()
+        })
     }
 
     /// Insert prompt into cache
@@ -99,25 +102,46 @@ impl ParallelPromptProcessor {
         prompts: Vec<String>,
         encode_fn: impl Fn(&str) -> Result<Vec<u32>> + Send + Sync + Clone + 'static,
     ) -> Result<Vec<Vec<u32>>> {
-        use tokio::task::JoinSet;
+        use tokio::task::{spawn_blocking, JoinSet};
 
+        let worker_limit = self.workers.max(1);
+        let semaphore = Arc::new(Semaphore::new(worker_limit));
         let mut join_set = JoinSet::new();
+        let total = prompts.len();
 
-        // Process prompts in parallel
-        for prompt in prompts {
+        for (index, prompt) in prompts.into_iter().enumerate() {
+            let permit = semaphore.clone();
             let encode = encode_fn.clone();
-            join_set.spawn(async move { encode(&prompt) });
+            join_set.spawn(async move {
+                let _permit = permit
+                    .acquire_owned()
+                    .await
+                    .map_err(|e| Error::tensor(format!("Prompt worker exhausted: {}", e)))?;
+
+                let tokens = spawn_blocking(move || encode(&prompt))
+                    .await
+                    .map_err(|e| Error::tensor(format!("Prompt worker failed: {}", e)))??;
+
+                Ok::<(usize, Vec<u32>), Error>((index, tokens))
+            });
         }
 
-        // Collect results
-        let mut results = Vec::new();
+        let mut results: Vec<Option<Vec<u32>>> = vec![None; total];
+
         while let Some(result) = join_set.join_next().await {
-            // result: Result<Result<Vec<u32>, Error>, JoinError>
-            let inner = result.map_err(|e| Error::tensor(format!("Task join error: {}", e)))?;
-            results.push(inner?);
+            let (index, tokens) =
+                result.map_err(|e| Error::tensor(format!("Task join error: {}", e)))??;
+            if let Some(slot) = results.get_mut(index) {
+                *slot = Some(tokens);
+            }
         }
 
-        Ok(results)
+        results
+            .into_iter()
+            .map(|maybe_tokens| {
+                maybe_tokens.ok_or_else(|| Error::tensor("Missing prompt batch result"))
+            })
+            .collect()
     }
 
     /// Process single prompt with caching
@@ -139,6 +163,51 @@ impl ParallelPromptProcessor {
         self.cache.insert(cache_key, tokens.clone()).await;
 
         Ok(tokens)
+    }
+
+    /// Process a batch of prompts with per-item cache keys.
+    ///
+    /// Cached prompts are returned immediately; misses are encoded in parallel
+    /// and inserted back into the cache after completion.
+    pub async fn process_batch_with_cache(
+        &self,
+        prompts: Vec<(String, String)>,
+        encode_fn: impl Fn(&str) -> Result<Vec<u32>> + Send + Sync + Clone + 'static,
+    ) -> Result<Vec<Vec<u32>>> {
+        let mut ordered: Vec<Option<Vec<u32>>> = Vec::with_capacity(prompts.len());
+        let mut misses: Vec<(usize, String, String)> = Vec::new();
+
+        for (index, (prompt, cache_key)) in prompts.into_iter().enumerate() {
+            if let Some(tokens) = self.cache.get(cache_key.as_str()).await {
+                ordered.push(Some(tokens));
+            } else {
+                ordered.push(None);
+                misses.push((index, prompt, cache_key));
+            }
+        }
+
+        if !misses.is_empty() {
+            let encoded = self
+                .process_batch(
+                    misses.iter().map(|(_, prompt, _)| prompt.clone()).collect(),
+                    encode_fn,
+                )
+                .await?;
+
+            for ((index, _, cache_key), tokens) in misses.into_iter().zip(encoded.into_iter()) {
+                self.cache.insert(cache_key, tokens.clone()).await;
+                if let Some(slot) = ordered.get_mut(index) {
+                    *slot = Some(tokens);
+                }
+            }
+        }
+
+        ordered
+            .into_iter()
+            .map(|maybe_tokens| {
+                maybe_tokens.ok_or_else(|| Error::tensor("Missing cached prompt result"))
+            })
+            .collect()
     }
 
     /// Get cache reference
@@ -191,5 +260,41 @@ mod tests {
             .unwrap();
 
         assert_eq!(results.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_parallel_processor_preserves_order() {
+        let processor = ParallelPromptProcessor::new(10, 2);
+
+        let prompts = vec!["a".to_string(), "bb".to_string(), "ccc".to_string()];
+
+        let results = processor
+            .process_batch(prompts, |s| Ok(vec![s.len() as u32]))
+            .await
+            .unwrap();
+
+        assert_eq!(results, vec![vec![1], vec![2], vec![3]]);
+    }
+
+    #[tokio::test]
+    async fn test_parallel_processor_batch_cache() {
+        let processor = ParallelPromptProcessor::new(10, 2);
+
+        let prompts = vec![
+            ("alpha".to_string(), "key-a".to_string()),
+            ("beta".to_string(), "key-b".to_string()),
+        ];
+
+        let first = processor
+            .process_batch_with_cache(prompts.clone(), |s| Ok(vec![s.len() as u32]))
+            .await
+            .unwrap();
+        assert_eq!(first, vec![vec![5], vec![4]]);
+
+        let second = processor
+            .process_batch_with_cache(prompts, |_| Ok(vec![99]))
+            .await
+            .unwrap();
+        assert_eq!(second, vec![vec![5], vec![4]]);
     }
 }
