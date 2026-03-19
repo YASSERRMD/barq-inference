@@ -469,6 +469,7 @@ impl GgufReader {
             GgufTensorType::Q8_0 => self.load_q8_0(&dimensions, total_elements)?,
             GgufTensorType::Q2_K => self.load_q2_k(&dimensions, total_elements)?,
             GgufTensorType::Q3_K => self.load_q3_k(&dimensions, total_elements)?,
+            GgufTensorType::Q5_K => self.load_q5_k(&dimensions, total_elements)?,
             GgufTensorType::Q4_K => self.load_q4_k(&dimensions, total_elements)?,
             GgufTensorType::Q6_K => self.load_q6_k(&dimensions, total_elements)?,
             GgufTensorType::IQ4_KS
@@ -646,6 +647,17 @@ impl GgufReader {
     ) -> Result<crate::tensor::TensorData> {
         let data = self.read_quantized_blocks(total_elements, 110)?;
         let values = dequantize_q3_k_bytes(&data, total_elements)?;
+        Ok(crate::tensor::TensorData::F32(values))
+    }
+
+    /// Load Q5_K quantized tensor and dequantize to f32
+    fn load_q5_k(
+        &mut self,
+        _dimensions: &[u64],
+        total_elements: usize,
+    ) -> Result<crate::tensor::TensorData> {
+        let data = self.read_quantized_blocks(total_elements, Q5K_BLOCK_BYTES)?;
+        let values = dequantize_q5_k_bytes(&data, total_elements)?;
         Ok(crate::tensor::TensorData::F32(values))
     }
 
@@ -853,6 +865,7 @@ impl GgufReader {
 const QK_K: usize = 256;
 const Q2K_BLOCK_BYTES: usize = 84;
 const Q3K_BLOCK_BYTES: usize = 110;
+const Q5K_BLOCK_BYTES: usize = 176;
 
 fn dequantize_q2_k_bytes(data: &[u8], total_elements: usize) -> Result<Vec<f32>> {
     let n_blocks = total_elements.div_ceil(QK_K);
@@ -1056,6 +1069,92 @@ fn dequantize_q3_k_block(block: &[u8], output: &mut [f32]) -> Result<()> {
     Ok(())
 }
 
+fn dequantize_q5_k_bytes(data: &[u8], total_elements: usize) -> Result<Vec<f32>> {
+    let n_blocks = total_elements.div_ceil(QK_K);
+    let expected_bytes = n_blocks * Q5K_BLOCK_BYTES;
+
+    if data.len() < expected_bytes {
+        return Err(Error::InvalidGguf(format!(
+            "Q5_K tensor needs {} bytes for {} blocks, got {}",
+            expected_bytes,
+            n_blocks,
+            data.len()
+        )));
+    }
+
+    let mut output = vec![0.0f32; n_blocks * QK_K];
+
+    for block_idx in 0..n_blocks {
+        let block_start = block_idx * Q5K_BLOCK_BYTES;
+        let block = &data[block_start..block_start + Q5K_BLOCK_BYTES];
+        let out_start = block_idx * QK_K;
+        let out_end = out_start + QK_K;
+        dequantize_q5_k_block(block, &mut output[out_start..out_end])?;
+    }
+
+    output.truncate(total_elements);
+    Ok(output)
+}
+
+fn dequantize_q5_k_block(block: &[u8], output: &mut [f32]) -> Result<()> {
+    if block.len() != Q5K_BLOCK_BYTES {
+        return Err(Error::InvalidGguf(format!(
+            "Q5_K block must be {} bytes, got {}",
+            Q5K_BLOCK_BYTES,
+            block.len()
+        )));
+    }
+    if output.len() < QK_K {
+        return Err(Error::InvalidGguf(format!(
+            "Q5_K output buffer must hold at least {} values, got {}",
+            QK_K,
+            output.len()
+        )));
+    }
+
+    let d = half::f16::from_le_bytes([block[0], block[1]]).to_f32();
+    let min = half::f16::from_le_bytes([block[2], block[3]]).to_f32();
+
+    let mut scales = [0u8; 12];
+    scales.copy_from_slice(&block[4..16]);
+    let qh = &block[16..48];
+    let qs = &block[48..176];
+
+    let mut out_idx = 0usize;
+    let mut scale_idx = 0usize;
+    let mut u1 = 1u8;
+    let mut u2 = 2u8;
+
+    for q_offset in (0..QK_K).step_by(64) {
+        let (sc1, m1) = GgufReader::get_scale_min_k4(scale_idx, &scales);
+        let d1 = d * sc1 as f32;
+        let m1 = min * m1 as f32;
+
+        let (sc2, m2) = GgufReader::get_scale_min_k4(scale_idx + 1, &scales);
+        let d2 = d * sc2 as f32;
+        let m2 = min * m2 as f32;
+
+        let ql = &qs[q_offset / 2..q_offset / 2 + 32];
+        for l in 0..32 {
+            let q = (ql[l] & 0x0f) + if qh[l] & u1 != 0 { 16 } else { 0 };
+            output[out_idx] = d1 * q as f32 - m1;
+            out_idx += 1;
+        }
+        for l in 0..32 {
+            let q = (ql[l] >> 4) + if qh[l] & u2 != 0 { 16 } else { 0 };
+            output[out_idx] = d2 * q as f32 - m2;
+            out_idx += 1;
+        }
+
+        scale_idx += 2;
+        u1 <<= 2;
+        u2 <<= 2;
+    }
+
+    debug_assert_eq!(out_idx, QK_K);
+    Ok(())
+}
+
 impl TensorType {
     /// Parse from u32 (GGUF type ID)
     fn from_u32(value: u32) -> Result<Self> {
@@ -1106,5 +1205,17 @@ mod tests {
         let values = dequantize_q3_k_bytes(&block, QK_K).unwrap();
         assert_eq!(values.len(), QK_K);
         assert!(values.iter().all(|&v| v == 128.0));
+    }
+
+    #[test]
+    fn test_dequantize_q5_k_bytes_constant_block() {
+        let mut block = [0u8; Q5K_BLOCK_BYTES];
+        block[0..2].copy_from_slice(&half::f16::from_f32(1.0).to_bits().to_le_bytes());
+        block[4..16].fill(1);
+        block[48..].fill(0x11);
+
+        let values = dequantize_q5_k_bytes(&block, QK_K).unwrap();
+        assert_eq!(values.len(), QK_K);
+        assert!(values.iter().all(|&v| (v - 1.0).abs() < f32::EPSILON));
     }
 }
