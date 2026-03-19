@@ -215,25 +215,25 @@ This plan addresses the gaps identified in `GAP_ANALYSIS.md` through focused, at
 **Goal:** Optimize DeepSeek and MoE model inference.
 
 ### Phase 23.1: FlashMLA Implementation
-- [ ] Create `advanced/src/flash_mla.rs`
-- [ ] Implement MLA-2 (K-cache only)
-- [ ] Implement MLA-3 (optimized)
-- [ ] Add `-mla` CLI flag
-- [ ] Document usage
+- [x] Create `advanced/src/flash_mla.rs`
+- [x] Implement MLA-2 (K-cache only)
+- [x] Implement MLA-3 (optimized)
+- [x] Add `-mla` CLI flag
+- [x] Document usage
 
 ### Phase 23.2: MoE Fused Operations
-- [ ] Create `models/src/moe_fused.rs`
-- [ ] Implement fused FFN up/gate
-- [ ] Implement expert batch processing
-- [ ] Add `-fmoe` CLI flag
-- [ ] Benchmark MoE speedup
+- [x] Create `models/src/moe_fused.rs`
+- [x] Implement fused FFN up/gate
+- [x] Implement expert batch processing
+- [x] Add `-fmoe` CLI flag
+- [x] Benchmark MoE speedup
 
 ### Phase 23.3: Smart Expert Reduction
-- [ ] Implement SER for DeepSeek
-- [ ] Add `-ser` CLI flag
-- [ ] Add expert routing optimization
-- [ ] Test accuracy vs speed
-- [ ] Document trade-offs
+- [x] Implement SER for DeepSeek
+- [x] Add `-ser` CLI flag
+- [x] Add expert routing optimization
+- [x] Test accuracy vs speed
+- [x] Document trade-offs
 
 ---
 
@@ -428,9 +428,9 @@ Each phase.X.Y gets its own branch, commits are atomic, and branches are pushed 
 | 22.1 | Done | phase_22_metal_backend | Metal device |
 | 22.2 | Done | phase_22_metal_backend | Metal shaders |
 | 22.3 | Done | phase_22_metal_backend | Metal pipeline |
-| 23.1 | Pending | - | FlashMLA |
-| 23.2 | Pending | - | MoE fused ops |
-| 23.3 | Pending | - | Smart Expert Reduction |
+| 23.1 | Done | phase_23_flashmla_moe | FlashMLA |
+| 23.2 | Done | phase_23_flashmla_moe | MoE fused ops |
+| 23.3 | Done | phase_23_flashmla_moe | Smart Expert Reduction |
 | 24.1 | Pending | - | Jinja templates |
 | 24.2 | Pending | - | HTTP server |
 | 24.3 | Pending | - | OpenAI API |

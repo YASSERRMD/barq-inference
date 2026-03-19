@@ -117,6 +117,18 @@ enum Commands {
         /// Constrain output to JSON object mode
         #[arg(long)]
         json: bool,
+
+        /// Enable FlashMLA context expansion for DeepSeek models
+        #[arg(long)]
+        mla: bool,
+
+        /// Enable fused MoE dispatch helpers
+        #[arg(long)]
+        fmoe: bool,
+
+        /// Enable smart expert reduction for MoE routing
+        #[arg(long)]
+        ser: bool,
     },
 
     /// Interactive chat mode
@@ -296,6 +308,9 @@ async fn main() -> anyhow::Result<()> {
             draft_max,
             speculation_preset,
             json,
+            mla,
+            fmoe,
+            ser,
         } => {
             cmd_run(
                 model,
@@ -310,6 +325,10 @@ async fn main() -> anyhow::Result<()> {
                 draft_max,
                 speculation_preset,
                 json,
+                cli.threads,
+                mla,
+                fmoe,
+                ser,
             )
             .await
         }
@@ -357,6 +376,10 @@ async fn cmd_run(
     draft_max: usize,
     speculation_preset: Option<String>,
     json_mode: bool,
+    threads: usize,
+    mla: bool,
+    fmoe: bool,
+    ser: bool,
 ) -> anyhow::Result<()> {
     use models::{
         context::{Batch, ContextParams},
@@ -379,6 +402,7 @@ async fn cmd_run(
     info!("Embedding dim: {}", loaded_model.hparams().n_embd);
     info!("Layers: {}", loaded_model.hparams().n_layer);
     let model_vocab_size = loaded_model.hparams().n_vocab as usize;
+    let model_arch = loaded_model.arch();
 
     // Create tokenizer
     let tokenizer = GgufTokenizer::from_gguf(loaded_model.metadata());
@@ -404,10 +428,51 @@ async fn cmd_run(
     // Create inference context
     let model_arc = Arc::new(loaded_model);
     let llama_model = LlamaModel::new(model_arc.clone())?;
-    let params = ContextParams {
+    let mut params = ContextParams {
         n_ctx: context_size as u32,
+        n_threads: threads.max(1) as u32,
+        n_threads_batch: threads.max(1) as u32,
         ..Default::default()
     };
+
+    if mla {
+        use advanced::{FlashMlaMode, FlashMlaRuntime};
+
+        match FlashMlaRuntime::from_model(&model_arc, FlashMlaMode::Mla3Optimized) {
+            Some(runtime) => {
+                params = runtime.apply_to_context(params);
+                info!(
+                    "FlashMLA enabled for {:?}: effective context {} tokens",
+                    model_arch, params.n_ctx
+                );
+            }
+            None => {
+                info!(
+                    "FlashMLA requested, but architecture {:?} does not expose MLA metadata",
+                    model_arch
+                );
+            }
+        }
+    }
+
+    if fmoe || ser {
+        let is_moe = matches!(
+            model_arch,
+            models::LlmArch::Mixtral | models::LlmArch::Qwen2Moe | models::LlmArch::DeepSeekMoE
+        );
+
+        if is_moe {
+            info!(
+                "MoE optimizations enabled: fused_dispatch={}, smart_expert_reduction={}",
+                fmoe, ser
+            );
+        } else {
+            info!(
+                "MoE optimization flags were set, but architecture {:?} is not MoE",
+                model_arch
+            );
+        }
+    }
 
     let context = llama_model.create_context(params)?;
     info!("Context created");
