@@ -18,34 +18,34 @@ This plan addresses the gaps identified in `GAP_ANALYSIS.md` through focused, at
 **Goal:** Implement critical missing quantization types for memory efficiency and model compatibility.
 
 ### Phase 17.1: Q2_K and Q3_K Quantization
-- [ ] Add Q2_K quantization struct in `quant/src/q2_k.rs`
-- [ ] Add Q3_K quantization struct in `quant/src/q3_k.rs`
-- [ ] Implement quantize/dequantize for both
-- [ ] Add SIMD optimizations (AVX2)
-- [ ] Add unit tests
-- [ ] Wire into `barq_core/src/gguf.rs` for loading
+- [x] Add Q2_K quantization struct in `quant/src/q2_k.rs`
+- [x] Add Q3_K quantization struct in `quant/src/q3_k.rs`
+- [x] Implement quantize/dequantize for both
+- [x] Add SIMD optimizations (AVX2)
+- [x] Add unit tests
+- [x] Wire into `barq_core/src/gguf.rs` for loading
 
 ### Phase 17.2: Q5_K Quantization
-- [ ] Add Q5_K quantization struct in `quant/src/q5_k.rs`
-- [ ] Implement block quantization with scales
-- [ ] Add SIMD optimizations
-- [ ] Add unit tests
-- [ ] Integrate with GGUF loader
+- [x] Add Q5_K quantization struct in `quant/src/q5_k.rs`
+- [x] Implement block quantization with scales
+- [x] Add SIMD optimizations
+- [x] Add unit tests
+- [x] Integrate with GGUF loader
 
 ### Phase 17.3: IK Quantization Integration
-- [ ] Complete `quant/src/ik_quant.rs` implementation
-- [ ] Implement IQ4_KS, IQ3_KS, IQ2_KS quantization
-- [ ] Implement Q4_K_R4 row-interleaved variant
-- [ ] Add `quantize_model_ik()` function
-- [ ] Add `repack_model_cpu()` for conversion
-- [ ] Add comprehensive tests
+- [x] Complete `quant/src/ik_quant.rs` implementation
+- [x] Implement IQ4_KS, IQ3_KS, IQ2_KS quantization
+- [x] Implement Q4_K_R4 row-interleaved variant
+- [x] Add `quantize_model_ik()` function
+- [x] Add `repack_model_cpu()` for conversion
+- [x] Add comprehensive tests
 
 ### Phase 17.4: KV Cache Quantization
-- [ ] Add Q8_KV quantization in `quant/src/q8_kv.rs`
-- [ ] Integrate with `models/src/kv_cache.rs`
-- [ ] Add runtime quantization flag
-- [ ] Implement defragmentation for quantized cache
-- [ ] Benchmark memory savings
+- [x] Add Q8_KV quantization in `quant/src/q8_kv.rs`
+- [x] Integrate with `models/src/kv_cache.rs`
+- [x] Add runtime quantization flag
+- [x] Implement defragmentation for quantized cache
+- [x] Benchmark memory savings
 
 ---
 
