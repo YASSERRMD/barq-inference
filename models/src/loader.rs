@@ -515,11 +515,104 @@ impl ModelLoader for DefaultModelLoader {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::arch::LlmArch;
+    use crate::test_support::write_test_gguf_file;
+    use barq_core::gguf::GgufValue;
 
     #[tokio::test]
     async fn test_hparams_defaults() {
         let hparams = ModelHParams::default();
         assert_eq!(hparams.n_layer, 32);
         assert_eq!(hparams.n_embd, 4096);
+    }
+
+    #[tokio::test]
+    async fn test_load_qwen_family_fixtures() {
+        let qwen_path = write_test_gguf_file(
+            "qwen",
+            &[
+                (
+                    "general.architecture",
+                    GgufValue::String("qwen".to_string()),
+                ),
+                ("llama.block_count", GgufValue::Uint32(24)),
+                ("llama.attention.head_count", GgufValue::Uint32(32)),
+                ("llama.attention.head_count_kv", GgufValue::Uint32(32)),
+                ("llama.embedding_length", GgufValue::Uint32(4096)),
+                ("llama.feed_forward_length", GgufValue::Uint32(11008)),
+                ("llama.context_length", GgufValue::Uint32(32768)),
+                ("qwen.rope.freq_base", GgufValue::Float32(1_000_000.0)),
+                ("qwen.rope.scaling.type", GgufValue::Uint32(1)),
+            ],
+        );
+
+        let qwen = Model::load(&qwen_path).await.unwrap();
+        assert_eq!(qwen.arch(), LlmArch::Qwen);
+        assert_eq!(qwen.hparams.n_layer, 24);
+        assert_eq!(qwen.hparams.n_head, 32);
+        assert_eq!(qwen.hparams.n_head_kv, 32);
+        assert_eq!(qwen.hparams.n_embd, 4096);
+        assert_eq!(qwen.hparams.n_ff, 11008);
+        assert_eq!(qwen.hparams.n_ctx_train, 32768);
+        assert_eq!(qwen.hparams.rope_freq_base, 1_000_000.0);
+        assert_eq!(qwen.hparams.rope_scaling_type, 1);
+
+        let qwen2_path = write_test_gguf_file(
+            "qwen2",
+            &[
+                (
+                    "general.architecture",
+                    GgufValue::String("qwen2".to_string()),
+                ),
+                ("general.vocab_size", GgufValue::Uint32(151_936)),
+                ("qwen.block_count", GgufValue::Uint32(28)),
+                ("qwen.attention.head_count", GgufValue::Uint32(40)),
+                ("qwen.attention.head_count_kv", GgufValue::Uint32(8)),
+                ("qwen.embedding_length", GgufValue::Uint32(5120)),
+                ("qwen.intermediate_size", GgufValue::Uint32(13_824)),
+                ("qwen.context_length", GgufValue::Uint32(32_768)),
+                ("qwen.rope.freq_base", GgufValue::Float32(1_000_000.0)),
+                ("qwen.rope.scaling.type", GgufValue::Uint32(1)),
+            ],
+        );
+
+        let qwen2 = Model::load(&qwen2_path).await.unwrap();
+        assert_eq!(qwen2.arch(), LlmArch::Qwen2);
+        assert_eq!(qwen2.hparams.n_layer, 28);
+        assert_eq!(qwen2.hparams.n_head, 40);
+        assert_eq!(qwen2.hparams.n_head_kv, 8);
+        assert_eq!(qwen2.hparams.n_embd, 5120);
+        assert_eq!(qwen2.hparams.n_ff, 13_824);
+        assert_eq!(qwen2.hparams.n_vocab, 151_936);
+        assert_eq!(qwen2.hparams.n_ctx_train, 32_768);
+        assert_eq!(qwen2.hparams.rope_scaling_type, 1);
+
+        let qwen3_path = write_test_gguf_file(
+            "qwen3",
+            &[
+                (
+                    "general.architecture",
+                    GgufValue::String("qwen3".to_string()),
+                ),
+                ("qwen.block_count", GgufValue::Uint32(32)),
+                ("qwen.attention.head_count", GgufValue::Uint32(64)),
+                ("qwen.attention.head_count_kv", GgufValue::Uint32(8)),
+                ("qwen.embedding_length", GgufValue::Uint32(8192)),
+                ("qwen.intermediate_size", GgufValue::Uint32(22_016)),
+                ("qwen.context_length", GgufValue::Uint32(131_072)),
+                ("qwen.rope.freq_base", GgufValue::Float32(1_000_000.0)),
+                ("qwen.rope.scaling.type", GgufValue::Uint32(1)),
+            ],
+        );
+
+        let qwen3 = Model::load(&qwen3_path).await.unwrap();
+        assert_eq!(qwen3.arch(), LlmArch::Qwen3);
+        assert_eq!(qwen3.hparams.n_layer, 32);
+        assert_eq!(qwen3.hparams.n_head, 64);
+        assert_eq!(qwen3.hparams.n_head_kv, 8);
+        assert_eq!(qwen3.hparams.n_embd, 8192);
+        assert_eq!(qwen3.hparams.n_ff, 22_016);
+        assert_eq!(qwen3.hparams.n_ctx_train, 131_072);
+        assert_eq!(qwen3.hparams.rope_scaling_type, 1);
     }
 }
