@@ -73,6 +73,11 @@ The implementation draws from research and optimizations including Flash Attenti
 - Configurable experts per token
 - Support for Mixtral-style MoE models
 
+**DeepSeek / MoE Optimizations**
+- FlashMLA context expansion for DeepSeek and DeepSeek-MoE models
+- Fused MoE dispatch helpers for batched expert execution
+- Smart expert reduction for pruning low-value expert paths at runtime
+
 ### Performance Optimizations
 
 **SIMD Support**
@@ -126,6 +131,15 @@ cargo build --release --features metal
 ```bash
 barq-inference run -m model.gguf -p "Explain quantum computing"
 ```
+
+**DeepSeek / MoE Optimizations**
+```bash
+barq-inference run -m deepseek.gguf -p "Explain MLA" --mla
+barq-inference run -m mixtral.gguf -p "Summarize this text" --fmoe --ser
+```
+
+`--mla` expands the effective context window for DeepSeek-family models using the loaded MLA metadata.
+`--fmoe` enables the fused expert dispatch helpers, and `--ser` turns on smart expert reduction for MoE routing.
 
 **JSON Mode**
 ```bash
