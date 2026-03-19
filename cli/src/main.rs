@@ -493,7 +493,138 @@ async fn cmd_server(model: PathBuf, host: String, port: u16) -> anyhow::Result<(
     info!("Starting server on {}:{}", host, port);
     info!("Model: {:?}", model);
 
-    // TODO: Implement actual server
+    use advanced::uds_server::{
+        InferenceHandler, InferenceRequest, InferenceResponse, InferenceServer, ServerConfig,
+    };
+    use async_trait::async_trait;
+    use barq_core::error::Result;
+    use models::{context::ContextParams, llama::LlamaModel, loader::Model};
+    use std::sync::Arc;
+    use tokio::sync::mpsc;
+    use vocab::{GgufTokenizer, Tokenizer};
+
+    // Load actual model
+    info!("Loading model for UDS Server: {:?}", model);
+    let loaded_model = Model::load(&model).await?;
+    let model_arc = Arc::new(loaded_model);
+    let llama_model = Arc::new(LlamaModel::new(model_arc.clone())?);
+    let tokenizer = Arc::new(GgufTokenizer::from_gguf(model_arc.metadata()));
+
+    struct ServerHandler {
+        model: Arc<LlamaModel>,
+        tokenizer: Arc<GgufTokenizer>,
+    }
+
+    #[async_trait]
+    impl InferenceHandler for ServerHandler {
+        async fn process_request(
+            &self,
+            request: InferenceRequest,
+            response_tx: mpsc::Sender<Result<InferenceResponse>>,
+        ) {
+            let start = std::time::Instant::now();
+            let params = ContextParams::default();
+
+            let context = match self.model.create_context(params) {
+                Ok(c) => c,
+                Err(e) => {
+                    let _ = response_tx.send(Err(e)).await;
+                    return;
+                }
+            };
+
+            let tokenization_result = match self.tokenizer.tokenize(&request.prompt, true).await {
+                Ok(r) => r,
+                Err(e) => {
+                    let _ = response_tx
+                        .send(Err(barq_core::error::Error::Backend(e.to_string())))
+                        .await;
+                    return;
+                }
+            };
+
+            let mut current_tokens: Vec<i32> = tokenization_result
+                .ids
+                .into_iter()
+                .map(|id| id as i32)
+                .collect();
+
+            let batch = models::context::Batch::from_tokens(&current_tokens);
+            let mut logits = match context.encode(&batch).await {
+                Ok(l) => l,
+                Err(e) => {
+                    let _ = response_tx.send(Err(e)).await;
+                    return;
+                }
+            };
+
+            let ttft = start.elapsed().as_millis() as u64;
+
+            for i in 0..request.max_tokens {
+                let token = match context.sample(&logits, request.temperature, 40, 0.95) {
+                    Ok(t) => t,
+                    Err(e) => {
+                        let _ = response_tx.send(Err(e)).await;
+                        break;
+                    }
+                };
+
+                let decode_res = context.decode(&models::context::Batch::single(token)).await;
+
+                let decoded_text = self
+                    .tokenizer
+                    .decode(&[token as u32])
+                    .await
+                    .unwrap_or_default();
+                let done = token == 0 || token == 2 || i == request.max_tokens - 1;
+
+                let response = InferenceResponse {
+                    id: request.id.clone(),
+                    text: decoded_text,
+                    tokens_generated: i + 1,
+                    ttft_ms: ttft,
+                    total_time_ms: start.elapsed().as_millis() as u64,
+                    done,
+                };
+
+                if response_tx.send(Ok(response)).await.is_err() {
+                    break;
+                }
+
+                if done {
+                    break;
+                }
+
+                current_tokens.push(token);
+
+                match decode_res {
+                    Ok(l) => logits = l,
+                    Err(e) => {
+                        let _ = response_tx.send(Err(e)).await;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    let handler = Arc::new(ServerHandler {
+        model: llama_model,
+        tokenizer,
+    });
+
+    let config = ServerConfig {
+        socket_path: std::path::PathBuf::from(format!("/tmp/barq-inference-{}.sock", port)),
+        ..Default::default()
+    };
+
+    let mut server = InferenceServer::with_handler(config, handler);
+    info!(
+        "Starting async UDS streaming server. TCP configuration ({}:{}) ignored.",
+        host, port
+    );
+
+    server.start().await?;
 
     Ok(())
 }

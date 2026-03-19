@@ -3,9 +3,10 @@
 //! Replaces HTTP with UDS for lower latency in local deployments.
 //! Eliminates TCP overhead for agentic loops and local inference.
 
+use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{mpsc, oneshot};
@@ -56,12 +57,46 @@ impl Default for ServerConfig {
     }
 }
 
+/// Trait for handling inference requests
+#[async_trait]
+pub trait InferenceHandler: Send + Sync + 'static {
+    async fn process_request(
+        &self,
+        request: InferenceRequest,
+        response_tx: mpsc::Sender<Result<InferenceResponse>>,
+    );
+}
+
+/// Dummy inference handler for testing
+pub struct DummyHandler;
+
+#[async_trait]
+impl InferenceHandler for DummyHandler {
+    async fn process_request(
+        &self,
+        request: InferenceRequest,
+        response_tx: mpsc::Sender<Result<InferenceResponse>>,
+    ) {
+        let start = std::time::Instant::now();
+        let response = InferenceResponse {
+            id: request.id.clone(),
+            text: format!("Response to: {}", request.prompt),
+            tokens_generated: 10,
+            ttft_ms: 100,
+            total_time_ms: start.elapsed().as_millis() as u64,
+            done: true,
+        };
+        let _ = response_tx.send(Ok(response)).await;
+    }
+}
+
 /// Async inference server
 pub struct InferenceServer {
     config: ServerConfig,
     request_tx: mpsc::Sender<InferenceTask>,
     request_rx: Mutex<Option<mpsc::Receiver<InferenceTask>>>,
     shutdown_tx: Option<oneshot::Sender<()>>,
+    handler: Arc<dyn InferenceHandler>,
 }
 
 /// Internal task for request processing
@@ -71,8 +106,13 @@ struct InferenceTask {
 }
 
 impl InferenceServer {
-    /// Create new inference server
+    /// Create new inference server with dummy handler
     pub fn new(config: ServerConfig) -> Self {
+        Self::with_handler(config, Arc::new(DummyHandler))
+    }
+
+    /// Create new inference server with a specific handler
+    pub fn with_handler(config: ServerConfig, handler: Arc<dyn InferenceHandler>) -> Self {
         let (request_tx, request_rx) = mpsc::channel(config.queue_size);
 
         Self {
@@ -80,6 +120,7 @@ impl InferenceServer {
             request_tx,
             request_rx: Mutex::new(Some(request_rx)),
             shutdown_tx: None,
+            handler,
         }
     }
 
@@ -101,8 +142,9 @@ impl InferenceServer {
 
         // Spawn request processor
         if let Some(rx) = self.request_rx.lock().expect("mutex poisoned").take() {
+            let handler = self.handler.clone();
             tokio::spawn(async move {
-                Self::request_processor(rx).await;
+                Self::request_processor(rx, handler).await;
             });
         }
 
@@ -220,28 +262,20 @@ impl InferenceServer {
         }
     }
 
-    /// Request processor (runs on blocking thread pool)
-    async fn request_processor(mut rx: mpsc::Receiver<InferenceTask>) {
+    /// Request processor
+    async fn request_processor(
+        mut rx: mpsc::Receiver<InferenceTask>,
+        handler: Arc<dyn InferenceHandler>,
+    ) {
         while let Some(task) = rx.recv().await {
             let InferenceTask {
                 request,
                 response_tx,
             } = task;
 
+            let handler_clone = handler.clone();
             tokio::spawn(async move {
-                let start = std::time::Instant::now();
-
-                // Build full response
-                let response = InferenceResponse {
-                    id: request.id.clone(),
-                    text: format!("Response to: {}", request.prompt),
-                    tokens_generated: 10,
-                    ttft_ms: 100,
-                    total_time_ms: start.elapsed().as_millis() as u64,
-                    done: true,
-                };
-
-                let _ = response_tx.send(Ok(response)).await;
+                handler_clone.process_request(request, response_tx).await;
             });
         }
     }
