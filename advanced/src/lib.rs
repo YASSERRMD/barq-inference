@@ -30,6 +30,7 @@
 //!
 //! This module implements cutting-edge inference optimizations:
 
+pub mod batch_engine;
 pub mod benchmarks;
 pub mod continuous_batching;
 pub mod flash_attention;
@@ -44,6 +45,7 @@ pub mod tensor_parallel;
 pub mod uds_server;
 // pub mod metrics_server;  // TODO: Fix hyper compatibility issues
 
+pub use batch_engine::{BatchEngine, BatchEngineHandle, BatchRequest};
 pub use benchmarks::{run_benchmark, BenchmarkResult};
 pub use continuous_batching::{Batch, BatchScheduler, ContinuousBatchingConfig};
 pub use flash_attention::FlashAttention;

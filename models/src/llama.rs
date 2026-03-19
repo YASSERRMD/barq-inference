@@ -40,6 +40,11 @@ impl LlamaModel {
     pub fn inner(&self) -> &Model {
         &self.model
     }
+
+    /// Returns the cached transformer (shared across all contexts)
+    pub fn transformer(&self) -> Arc<crate::transformer::LlamaTransformer> {
+        Arc::clone(&self.transformer)
+    }
 }
 
 #[cfg(test)]

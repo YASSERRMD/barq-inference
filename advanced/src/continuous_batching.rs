@@ -9,6 +9,8 @@ use std::collections::VecDeque;
 
 use barq_core::error::{Error, Result};
 
+use tokio::sync::mpsc;
+
 /// Active sequence processing state
 #[derive(Debug)]
 pub struct ActiveSequence {
@@ -18,7 +20,7 @@ pub struct ActiveSequence {
     pub max_tokens: usize,
     pub next_pos: i32,
     pub is_prefill: bool,
-    pub response_tx: tokio::sync::oneshot::Sender<Vec<i32>>,
+    pub response_tx: mpsc::UnboundedSender<i32>,
 }
 
 /// Batch scheduler for continuous batching
@@ -39,7 +41,7 @@ pub struct BatchScheduler {
 pub struct PendingRequest {
     pub tokens: Vec<i32>,
     pub max_tokens: usize,
-    pub response_tx: tokio::sync::oneshot::Sender<Vec<i32>>,
+    pub response_tx: mpsc::UnboundedSender<i32>,
 }
 
 impl BatchScheduler {
@@ -54,9 +56,13 @@ impl BatchScheduler {
         }
     }
 
-    /// Add a new request to the pending queue
-    pub async fn add_request(&mut self, tokens: Vec<i32>, max_tokens: usize) -> Result<Vec<i32>> {
-        let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+    /// Add a new request to the pending queue, returning a streaming receiver
+    pub async fn add_request(
+        &mut self,
+        tokens: Vec<i32>,
+        max_tokens: usize,
+    ) -> Result<mpsc::UnboundedReceiver<i32>> {
+        let (response_tx, response_rx) = mpsc::unbounded_channel();
 
         self.pending.push_back(PendingRequest {
             tokens,
@@ -64,15 +70,12 @@ impl BatchScheduler {
             response_tx,
         });
 
-        // Return response channel
-        tokio::task::spawn(async move {
-            match response_rx.await {
-                Ok(tokens) => Ok(tokens),
-                Err(_) => Err(Error::Backend("Request cancelled".to_string())),
-            }
-        })
-        .await
-        .unwrap()
+        Ok(response_rx)
+    }
+
+    /// Synchronously enqueue a pre-constructed `PendingRequest` (used by the engine loop)
+    pub fn enqueue(&mut self, req: PendingRequest) {
+        self.pending.push_back(req);
     }
 
     /// Fill batch for next forward pass
@@ -149,6 +152,9 @@ impl BatchScheduler {
             let token = new_tokens[idx];
             seq.generated_tokens.push(token);
 
+            // Stream the token directly back to the handler
+            let _ = seq.response_tx.send(token);
+
             // Check if sequence is complete (EOS or max_tokens reached)
             if token == 0 || token == 2 || seq.generated_tokens.len() >= seq.max_tokens {
                 completed_indices.push(idx);
@@ -157,8 +163,7 @@ impl BatchScheduler {
 
         // Remove completed sequences in reverse order to preserve indices
         for &idx in completed_indices.iter().rev() {
-            let seq = self.active.remove(idx);
-            let _ = seq.response_tx.send(seq.generated_tokens);
+            self.active.remove(idx);
         }
 
         Ok(())

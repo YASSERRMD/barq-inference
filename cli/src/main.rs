@@ -628,3 +628,120 @@ async fn cmd_server(model: PathBuf, host: String, port: u16) -> anyhow::Result<(
 
     Ok(())
 }
+
+// ── Phase 6.2: Continuous BatchEngine handler ─────────────────────────────────
+
+async fn cmd_server_batch(model: PathBuf, host: String, port: u16) -> anyhow::Result<()> {
+    info!("Starting continuous-batching server on {}:{}", host, port);
+
+    use advanced::uds_server::{
+        InferenceHandler, InferenceRequest, InferenceResponse, InferenceServer, ServerConfig,
+    };
+    use advanced::{BatchEngine, BatchEngineHandle, ContinuousBatchingConfig};
+    use async_trait::async_trait;
+    use barq_core::error::Result;
+    use models::{llama::LlamaModel, loader::Model};
+    use std::sync::Arc;
+    use tokio::sync::mpsc;
+    use vocab::{GgufTokenizer, Tokenizer};
+
+    info!("Loading model for continuous-batching server: {:?}", model);
+    let loaded_model = Model::load(&model).await?;
+    let model_arc = Arc::new(loaded_model);
+    let llama_model = Arc::new(LlamaModel::new(model_arc.clone())?);
+    let tokenizer = Arc::new(GgufTokenizer::from_gguf(model_arc.metadata()));
+
+    // Build the BatchEngine (spawned as a background task)
+    let transformer = llama_model.transformer();
+    let batch_config = ContinuousBatchingConfig::default();
+    let (batch_engine, engine_handle) =
+        BatchEngine::new(model_arc.clone(), transformer, batch_config);
+
+    tokio::spawn(async move {
+        batch_engine.run().await;
+    });
+
+    struct BatchHandler {
+        engine: BatchEngineHandle,
+        tokenizer: Arc<GgufTokenizer>,
+    }
+
+    #[async_trait]
+    impl InferenceHandler for BatchHandler {
+        async fn process_request(
+            &self,
+            request: InferenceRequest,
+            response_tx: mpsc::Sender<Result<InferenceResponse>>,
+        ) {
+            let start = std::time::Instant::now();
+
+            let tokenization_result = match self.tokenizer.tokenize(&request.prompt, true).await {
+                Ok(r) => r,
+                Err(e) => {
+                    let _ = response_tx
+                        .send(Err(barq_core::error::Error::Backend(e.to_string())))
+                        .await;
+                    return;
+                }
+            };
+
+            let tokens: Vec<i32> = tokenization_result
+                .ids
+                .into_iter()
+                .map(|id| id as i32)
+                .collect();
+
+            let ttft = start.elapsed().as_millis() as u64;
+
+            // Submit to the shared batch engine
+            let mut rx = match self.engine.submit(tokens, request.max_tokens).await {
+                Ok(r) => r,
+                Err(e) => {
+                    let _ = response_tx.send(Err(e)).await;
+                    return;
+                }
+            };
+
+            let mut tokens_generated = 0u32;
+            while let Some(token) = rx.recv().await {
+                tokens_generated += 1;
+                let done = token == 0 || token == 2;
+
+                let decoded_text = self
+                    .tokenizer
+                    .decode(&[token as u32])
+                    .await
+                    .unwrap_or_default();
+
+                let response = InferenceResponse {
+                    id: request.id.clone(),
+                    text: decoded_text,
+                    tokens_generated: tokens_generated as usize,
+                    ttft_ms: ttft,
+                    total_time_ms: start.elapsed().as_millis() as u64,
+                    done,
+                };
+
+                if response_tx.send(Ok(response)).await.is_err() || done {
+                    break;
+                }
+            }
+        }
+    }
+
+    let handler = Arc::new(BatchHandler {
+        engine: engine_handle,
+        tokenizer,
+    });
+
+    let config = ServerConfig {
+        socket_path: std::path::PathBuf::from(format!("/tmp/barq-inference-batch-{}.sock", port)),
+        ..Default::default()
+    };
+
+    let mut server = InferenceServer::with_handler(config, handler);
+    info!("Continuous batching server ready.");
+    server.start().await?;
+
+    Ok(())
+}

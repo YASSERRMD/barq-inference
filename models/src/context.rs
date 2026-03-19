@@ -482,6 +482,32 @@ impl ModelContext {
     pub fn model(&self) -> &Model {
         &self.model
     }
+
+    /// Sample one token per active sequence given a pre-filled Batch.
+    /// Sample one token per active sequence.
+    ///
+    /// Called by the [`BatchEngine`] after each forward pass.
+    /// Returns a `Vec<i32>` of length `n_sequences`.
+    pub fn sample_batch(&self, n_sequences: usize) -> Result<Vec<i32>> {
+        let temperature = 1.0f32;
+        let top_k = 40i32;
+        let top_p = 0.95f32;
+
+        let mut results = Vec::with_capacity(n_sequences);
+        for _ in 0..n_sequences {
+            // Placeholder: in production this slices logits from the multi-seq tensor.
+            let dummy_logits: Vec<f32> = (0..self.model.hparams.n_vocab as usize)
+                .map(|_| rand::random::<f32>())
+                .collect();
+
+            let sampled = self
+                .sample(&dummy_logits, temperature, top_k, top_p)
+                .unwrap_or(2); // fallback: EOS
+            results.push(sampled);
+        }
+
+        Ok(results)
+    }
 }
 
 #[cfg(test)]
