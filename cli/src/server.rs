@@ -11,7 +11,7 @@ use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::Context;
 use bytes::Bytes;
@@ -35,6 +35,7 @@ use models::{
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::net::TcpListener;
+use tokio::sync::Mutex;
 use tracing::info;
 use vocab::{ChatMessage, ChatRole, ChatTemplate, GgufTokenizer, Tokenizer};
 
@@ -188,7 +189,99 @@ struct CompletionResult {
     text: String,
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone, Serialize)]
+struct ModelCard {
+    id: String,
+    object: String,
+    created: u64,
+    owned_by: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ModelListResponse {
+    object: String,
+    data: Vec<ModelCard>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ResponsesResponse {
+    id: String,
+    object: String,
+    created: u64,
+    model: String,
+    output: String,
+    usage: Usage,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ResponsesRequest {
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    #[serde(alias = "prompt")]
+    input: Option<String>,
+    #[serde(default)]
+    messages: Option<Vec<IncomingMessage>>,
+    #[serde(default, alias = "max_output_tokens", alias = "max_tokens")]
+    max_tokens: Option<usize>,
+    #[serde(default)]
+    temperature: Option<f32>,
+    #[serde(default)]
+    top_p: Option<f32>,
+    #[serde(default)]
+    top_k: Option<i32>,
+    #[serde(default)]
+    stream: Option<bool>,
+}
+
+#[derive(Debug)]
+struct RateLimitState {
+    tokens: f64,
+    last_refill: Instant,
+}
+
+#[derive(Debug)]
+struct RateLimiter {
+    capacity: f64,
+    refill_per_second: f64,
+    states: Mutex<HashMap<String, RateLimitState>>,
+}
+
+impl RateLimiter {
+    fn new(requests_per_minute: u32) -> Self {
+        let capacity = requests_per_minute.max(1) as f64;
+        Self {
+            capacity,
+            refill_per_second: capacity / 60.0,
+            states: Mutex::new(HashMap::new()),
+        }
+    }
+
+    async fn allow(&self, key: &str) -> bool {
+        let mut states = self.states.lock().await;
+        let state = states
+            .entry(key.to_string())
+            .or_insert_with(|| RateLimitState {
+                tokens: self.capacity,
+                last_refill: Instant::now(),
+            });
+
+        let elapsed = state.last_refill.elapsed().as_secs_f64();
+        let refill = elapsed * self.refill_per_second;
+        if refill > 0.0 {
+            state.tokens = (state.tokens + refill).min(self.capacity);
+            state.last_refill = Instant::now();
+        }
+
+        if state.tokens >= 1.0 {
+            state.tokens -= 1.0;
+            true
+        } else {
+            false
+        }
+    }
+}
+
 struct HttpServerState {
     model_path: PathBuf,
     model_id: String,
@@ -197,6 +290,7 @@ struct HttpServerState {
     tokenizer: Arc<GgufTokenizer>,
     chat_template: ChatTemplate,
     context_size: usize,
+    rate_limiter: Option<RateLimiter>,
 }
 
 /// Run the HTTP server.
@@ -222,6 +316,7 @@ pub async fn run_http_server(config: HttpServerConfig) -> anyhow::Result<()> {
         tokenizer,
         chat_template,
         context_size: config.context_size,
+        rate_limiter: Some(RateLimiter::new(config.rate_limit_rpm)),
     });
 
     let addr: SocketAddr = format!("{}:{}", config.host, config.port).parse()?;
@@ -231,7 +326,13 @@ pub async fn run_http_server(config: HttpServerConfig) -> anyhow::Result<()> {
         "OpenAI-compatible HTTP server listening on http://{} (model: {}, arch: {:?})",
         addr, model_id, model_arch
     );
-    info!("Phase 24.2 server is ready: /v1/completions and /v1/chat/completions");
+    info!(
+        "Phase 24.3 server is ready: /v1/models, /v1/responses, /v1/completions and /v1/chat/completions"
+    );
+    info!(
+        "Rate limiting enabled at {} requests/minute per client",
+        config.rate_limit_rpm
+    );
 
     loop {
         let (stream, peer) = listener.accept().await?;
@@ -255,13 +356,15 @@ impl HttpServerState {
         match (req.method(), req.uri().path()) {
             (&Method::OPTIONS, _) => self.empty_response(StatusCode::NO_CONTENT),
             (&Method::GET, "/") => self.root_response(),
+            (&Method::GET, "/v1/models") => self.models_response(),
             (&Method::POST, "/v1/completions") => self.handle_completions(req, peer).await,
             (&Method::POST, "/v1/chat/completions") => {
                 self.handle_chat_completions(req, peer).await
             }
+            (&Method::POST, "/v1/responses") => self.handle_responses(req, peer).await,
             _ => self.error_response(
                 StatusCode::NOT_FOUND,
-                "route not found; try /v1/completions or /v1/chat/completions",
+                "route not found; try /v1/models, /v1/responses, /v1/completions or /v1/chat/completions",
             ),
         }
     }
@@ -272,6 +375,8 @@ impl HttpServerState {
             "model": self.model_id,
             "architecture": self.model_arch.name(),
             "endpoints": [
+                "/v1/models",
+                "/v1/responses",
                 "/v1/completions",
                 "/v1/chat/completions",
             ],
@@ -279,11 +384,30 @@ impl HttpServerState {
         self.json_response(StatusCode::OK, body)
     }
 
+    fn models_response(&self) -> Response<RespBody> {
+        self.json_response(
+            StatusCode::OK,
+            ModelListResponse {
+                object: "list".to_string(),
+                data: vec![ModelCard {
+                    id: self.model_id.clone(),
+                    object: "model".to_string(),
+                    created: unix_timestamp(),
+                    owned_by: "barq".to_string(),
+                }],
+            },
+        )
+    }
+
     async fn handle_completions(
         &self,
         req: Request<Incoming>,
         peer: SocketAddr,
     ) -> Response<RespBody> {
+        if let Some(resp) = self.enforce_rate_limit(peer).await {
+            return resp;
+        }
+
         let request: CompletionsRequest = match self.read_json(req).await {
             Ok(r) => r,
             Err(resp) => return resp,
@@ -314,6 +438,10 @@ impl HttpServerState {
         req: Request<Incoming>,
         peer: SocketAddr,
     ) -> Response<RespBody> {
+        if let Some(resp) = self.enforce_rate_limit(peer).await {
+            return resp;
+        }
+
         let request: ChatCompletionsRequest = match self.read_json(req).await {
             Ok(r) => r,
             Err(resp) => return resp,
@@ -342,6 +470,45 @@ impl HttpServerState {
                     self.stream_chat_response(result, request.model, peer).await
                 } else {
                     self.chat_response(result, request.model)
+                }
+            }
+            Err(err) => self.error_response(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()),
+        }
+    }
+
+    async fn handle_responses(
+        &self,
+        req: Request<Incoming>,
+        peer: SocketAddr,
+    ) -> Response<RespBody> {
+        if let Some(resp) = self.enforce_rate_limit(peer).await {
+            return resp;
+        }
+
+        let request: ResponsesRequest = match self.read_json(req).await {
+            Ok(r) => r,
+            Err(resp) => return resp,
+        };
+
+        let prompt = match self.render_responses_prompt(&request) {
+            Ok(prompt) => prompt,
+            Err(resp) => return resp,
+        };
+
+        let options = GenerationOptions {
+            max_tokens: request.max_tokens.unwrap_or(128),
+            temperature: request.temperature.unwrap_or(0.8),
+            top_k: request.top_k.unwrap_or(40),
+            top_p: request.top_p.unwrap_or(0.95),
+        };
+
+        match self.generate_text(prompt, options).await {
+            Ok(result) => {
+                if request.stream.unwrap_or(false) {
+                    self.stream_responses_response(result, request.model, peer)
+                        .await
+                } else {
+                    self.responses_response(result, request.model)
                 }
             }
             Err(err) => self.error_response(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()),
@@ -379,6 +546,27 @@ impl HttpServerState {
         Ok((system_prompt, chat_messages))
     }
 
+    fn render_responses_prompt(
+        &self,
+        request: &ResponsesRequest,
+    ) -> Result<String, Response<RespBody>> {
+        if let Some(messages) = &request.messages {
+            let (system_prompt, chat_messages) = self.normalize_messages(messages)?;
+            return self
+                .render_chat_prompt(system_prompt.as_deref(), &chat_messages)
+                .map_err(|err| self.error_response(StatusCode::BAD_REQUEST, &err.to_string()));
+        }
+
+        if let Some(input) = &request.input {
+            return Ok(input.clone());
+        }
+
+        Err(self.error_response(
+            StatusCode::BAD_REQUEST,
+            "responses request requires `input` or `messages`",
+        ))
+    }
+
     fn render_chat_prompt(
         &self,
         system_prompt: Option<&str>,
@@ -401,12 +589,8 @@ impl HttpServerState {
             ..Default::default()
         };
 
-        let tokenization_result = self.tokenizer.tokenize(&prompt, true).await?;
-        let prompt_tokens: Vec<i32> = tokenization_result
-            .ids
-            .iter()
-            .map(|&id| id as i32)
-            .collect();
+        let (prompt_tokens, prompt_token_count) =
+            tokenize_prompt(self.tokenizer.as_ref(), &prompt, true).await?;
 
         if prompt_tokens.is_empty() {
             return Err(anyhow::anyhow!("prompt tokenized to no tokens"));
@@ -432,7 +616,7 @@ impl HttpServerState {
         let text = self.tokenizer.decode(&generated_ids).await?;
 
         Ok(CompletionResult {
-            prompt_tokens: prompt_tokens.len(),
+            prompt_tokens: prompt_token_count,
             generated_ids,
             text,
         })
@@ -454,6 +638,27 @@ impl HttpServerState {
                 text: result.text.clone(),
                 finish_reason: "stop".to_string(),
             }],
+            usage: Usage {
+                prompt_tokens: result.prompt_tokens,
+                completion_tokens: result.generated_ids.len(),
+                total_tokens: result.prompt_tokens + result.generated_ids.len(),
+            },
+        };
+        self.json_response(StatusCode::OK, response)
+    }
+
+    fn responses_response(
+        &self,
+        result: CompletionResult,
+        requested_model: Option<String>,
+    ) -> Response<RespBody> {
+        let model = requested_model.unwrap_or_else(|| self.model_id.clone());
+        let response = ResponsesResponse {
+            id: response_id("resp"),
+            object: "response".to_string(),
+            created: unix_timestamp(),
+            model,
+            output: result.text.clone(),
             usage: Usage {
                 prompt_tokens: result.prompt_tokens,
                 completion_tokens: result.generated_ids.len(),
@@ -584,12 +789,61 @@ impl HttpServerState {
         self.stream_response(chunks)
     }
 
+    async fn stream_responses_response(
+        &self,
+        result: CompletionResult,
+        requested_model: Option<String>,
+        _peer: SocketAddr,
+    ) -> Response<RespBody> {
+        let model = requested_model.unwrap_or_else(|| self.model_id.clone());
+        let created = unix_timestamp();
+        let id = response_id("resp");
+        let model_name = model.clone();
+        let event_id = id.clone();
+
+        let decoded_tokens = self
+            .decode_token_chunks(&result.generated_ids)
+            .await
+            .unwrap_or_default();
+
+        let chunks = decoded_tokens
+            .into_iter()
+            .map(move |content| {
+                let chunk = json!({
+                    "id": event_id,
+                    "object": "response.chunk",
+                    "created": created,
+                    "model": model_name,
+                    "output": content,
+                });
+                Ok::<_, Infallible>(Frame::data(Bytes::from(format!("data: {}\n\n", chunk))))
+            })
+            .chain(std::iter::once(Ok(Frame::data(Bytes::from(
+                "data: [DONE]\n\n",
+            )))));
+
+        self.stream_response(chunks)
+    }
+
     async fn decode_token_chunks(&self, tokens: &[u32]) -> anyhow::Result<Vec<String>> {
         let mut decoded = Vec::with_capacity(tokens.len());
         for token in tokens {
             decoded.push(self.tokenizer.decode(&[*token]).await?);
         }
         Ok(decoded)
+    }
+
+    async fn enforce_rate_limit(&self, peer: SocketAddr) -> Option<Response<RespBody>> {
+        let limiter = match &self.rate_limiter {
+            Some(limiter) => limiter,
+            None => return None,
+        };
+
+        if limiter.allow(&peer.ip().to_string()).await {
+            None
+        } else {
+            Some(self.rate_limit_response())
+        }
     }
 
     fn stream_response<I>(&self, chunks: I) -> Response<RespBody>
@@ -646,6 +900,18 @@ impl HttpServerState {
         resp
     }
 
+    fn rate_limit_response(&self) -> Response<RespBody> {
+        let response = ErrorResponse {
+            error: ErrorDetail {
+                message: "rate limit exceeded".to_string(),
+                kind: "rate_limit_error".to_string(),
+            },
+        };
+        let mut resp = self.json_response(StatusCode::TOO_MANY_REQUESTS, response);
+        *resp.status_mut() = StatusCode::TOO_MANY_REQUESTS;
+        resp
+    }
+
     fn add_cors_headers(&self, mut response: Response<RespBody>) -> Response<RespBody> {
         let headers = response.headers_mut();
         headers.insert(ACCESS_CONTROL_ALLOW_ORIGIN, "*".parse().unwrap());
@@ -676,6 +942,21 @@ impl HttpServerState {
     }
 }
 
+async fn tokenize_prompt<T: Tokenizer>(
+    tokenizer: &T,
+    text: &str,
+    add_special: bool,
+) -> anyhow::Result<(Vec<i32>, usize)> {
+    let tokenization_result = tokenizer.tokenize(text, add_special).await?;
+    let ids: Vec<i32> = tokenization_result
+        .ids
+        .iter()
+        .map(|&id| id as i32)
+        .collect();
+    let count = tokenization_result.ids.len();
+    Ok((ids, count))
+}
+
 fn parse_role(role: &str) -> Option<ChatRole> {
     match role.to_ascii_lowercase().as_str() {
         "system" => Some(ChatRole::System),
@@ -696,4 +977,36 @@ fn unix_timestamp() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs())
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use vocab::tokenizer::WhitespaceTokenizer;
+
+    #[tokio::test]
+    async fn tokenize_prompt_counts_tokens() {
+        let tokenizer = WhitespaceTokenizer::new();
+        let (_ids, count) = tokenize_prompt(&tokenizer, "hello world", false)
+            .await
+            .expect("tokenization should succeed");
+
+        assert_eq!(count, 2);
+    }
+
+    #[tokio::test]
+    async fn rate_limiter_allows_then_blocks() {
+        let limiter = RateLimiter::new(1);
+
+        assert!(limiter.allow("127.0.0.1").await);
+        assert!(!limiter.allow("127.0.0.1").await);
+    }
+
+    #[test]
+    fn responses_request_accepts_prompt_alias() {
+        let request: ResponsesRequest =
+            serde_json::from_str(r#"{"prompt":"Say hello"}"#).expect("request should deserialize");
+
+        assert_eq!(request.input.as_deref(), Some("Say hello"));
+    }
 }
