@@ -62,9 +62,38 @@ impl QwenModel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::write_test_gguf_file;
+    use barq_core::gguf::GgufValue;
+    use std::sync::Arc;
 
-    #[test]
-    fn test_qwen_creation() {
-        // Placeholder - would need actual model data
+    async fn load_qwen_model() -> Arc<Model> {
+        let path = write_test_gguf_file(
+            "qwen",
+            &[
+                (
+                    "general.architecture",
+                    GgufValue::String("qwen".to_string()),
+                ),
+                ("llama.block_count", GgufValue::Uint32(24)),
+                ("llama.attention.head_count", GgufValue::Uint32(32)),
+                ("llama.attention.head_count_kv", GgufValue::Uint32(32)),
+                ("llama.embedding_length", GgufValue::Uint32(4096)),
+                ("llama.feed_forward_length", GgufValue::Uint32(11_008)),
+                ("llama.context_length", GgufValue::Uint32(32_768)),
+                ("qwen.rope.freq_base", GgufValue::Float32(1_000_000.0)),
+                ("qwen.rope.scaling.type", GgufValue::Uint32(1)),
+            ],
+        );
+        Arc::new(Model::load(&path).await.unwrap())
+    }
+
+    #[tokio::test]
+    async fn test_qwen_creation() {
+        let model = load_qwen_model().await;
+        let wrapper = QwenModel::new(model).unwrap();
+
+        assert!(wrapper.has_ntk_scaling());
+        assert_eq!(wrapper.rope_base(), 1_000_000.0);
+        assert!(wrapper.create_context(ContextParams::default()).is_ok());
     }
 }

@@ -393,6 +393,14 @@ impl ArchitectureRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::write_test_gguf_file;
+    use barq_core::gguf::GgufValue;
+    use std::sync::Arc;
+
+    async fn load_fixture_model(prefix: &str, kv_pairs: &[(&str, GgufValue)]) -> Arc<Model> {
+        let path = write_test_gguf_file(prefix, kv_pairs);
+        Arc::new(Model::load(&path).await.unwrap())
+    }
 
     #[test]
     fn test_architecture_from_name() {
@@ -412,6 +420,14 @@ mod tests {
             ArchitectureRegistry::from_name("qwen3"),
             Some(LlmArch::Qwen3)
         );
+        assert_eq!(
+            ArchitectureRegistry::from_name("deepseek"),
+            Some(LlmArch::DeepSeek)
+        );
+        assert_eq!(
+            ArchitectureRegistry::from_name("deepseek.moe"),
+            Some(LlmArch::DeepSeekMoE)
+        );
         assert_eq!(ArchitectureRegistry::from_name("unknown"), None);
     }
 
@@ -424,6 +440,8 @@ mod tests {
         assert!(supported.contains(&LlmArch::Qwen));
         assert!(supported.contains(&LlmArch::Qwen2));
         assert!(supported.contains(&LlmArch::Qwen3));
+        assert!(supported.contains(&LlmArch::DeepSeek));
+        assert!(supported.contains(&LlmArch::DeepSeekMoE));
     }
 
     #[test]
@@ -439,5 +457,63 @@ mod tests {
         let caps = ArchitectureRegistry::capabilities(LlmArch::Qwen3);
         assert!(caps.contains(&"GQA"));
         assert!(caps.contains(&"NTK-aware RoPE"));
+    }
+
+    #[tokio::test]
+    async fn test_create_model_deepseek() {
+        let model = load_fixture_model(
+            "arch-registry-deepseek",
+            &[
+                (
+                    "general.architecture",
+                    GgufValue::String("deepseek".to_string()),
+                ),
+                ("deepseek.block_count", GgufValue::Uint32(28)),
+                ("deepseek.attention.head_count", GgufValue::Uint32(32)),
+                ("deepseek.attention.head_count_kv", GgufValue::Uint32(8)),
+                ("deepseek.embedding_length", GgufValue::Uint32(4096)),
+                ("deepseek.intermediate_size", GgufValue::Uint32(11_008)),
+                ("deepseek.context_length", GgufValue::Uint32(131_072)),
+                ("deepseek.rope.scaling.type", GgufValue::Uint32(2)),
+                ("deepseek.n_latent_heads", GgufValue::Uint32(8)),
+            ],
+        )
+        .await;
+
+        let arch = ArchitectureRegistry::create_model(model).unwrap();
+        assert_eq!(arch.arch(), LlmArch::DeepSeek);
+        assert_eq!(arch.arch_name(), "deepseek");
+        assert!(arch.features().contains(&"MLA"));
+        assert!(arch.features().contains(&"Yarn RoPE"));
+    }
+
+    #[tokio::test]
+    async fn test_create_model_mixtral() {
+        let model = load_fixture_model(
+            "arch-registry-mixtral",
+            &[
+                (
+                    "general.architecture",
+                    GgufValue::String("mixtral".to_string()),
+                ),
+                ("llama.block_count", GgufValue::Uint32(32)),
+                ("llama.attention.head_count", GgufValue::Uint32(32)),
+                ("llama.attention.head_count_kv", GgufValue::Uint32(8)),
+                ("llama.embedding_length", GgufValue::Uint32(4096)),
+                ("llama.feed_forward_length", GgufValue::Uint32(14_336)),
+                ("llama.context_length", GgufValue::Uint32(32_768)),
+                ("llama.rope.scaling.type", GgufValue::Uint32(1)),
+                ("llama.expert_count", GgufValue::Uint32(8)),
+                ("llama.expert_used_count", GgufValue::Uint32(2)),
+                ("mixtral.sliding_window", GgufValue::Uint32(4_096)),
+            ],
+        )
+        .await;
+
+        let arch = ArchitectureRegistry::create_model(model).unwrap();
+        assert_eq!(arch.arch(), LlmArch::Mixtral);
+        assert_eq!(arch.arch_name(), "mixtral");
+        assert!(arch.features().contains(&"MoE"));
+        assert!(arch.features().contains(&"Sliding Window"));
     }
 }

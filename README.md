@@ -19,6 +19,14 @@ The implementation draws from research and optimizations including Flash Attenti
 - Support for models from 7B to 405B parameters
 - Mixture of Experts (MoE) models like Mixtral 8x7B
 
+**Supported Architecture Families**
+- LLaMA / LLaMA 2 / LLaMA 3
+- Mistral
+- Mixtral
+- Qwen / Qwen2 / Qwen2-MoE / Qwen3
+- DeepSeek / DeepSeek-MoE
+- Other GGUF families through the shared loader and registry, including GPT-2, BERT, T5, Bloom, Falcon, MPT, Phi, Gemma, and StarCoder2
+
 **Quantization**
 - 15+ quantization types: Q4_0, Q4_K, Q5_K, Q6_K, IQ2_XXS, IQ4_NL, TQ1_0, TQ2_0
 - Block-wise quantization with proper scaling
