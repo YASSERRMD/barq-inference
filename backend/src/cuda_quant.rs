@@ -9,29 +9,35 @@ use crate::cuda::CudaBackend;
 use barq_core::blas;
 use barq_core::error::{Error, Result};
 use barq_core::quant::QuantizationType;
+use std::sync::Arc;
 
 #[cfg(feature = "cuda")]
-use cudarc::driver::safe::{CudaDevice, CudaSlice};
+use cudarc::driver::{
+    safe::{CudaDevice, CudaSlice},
+    DeviceRepr,
+};
 
 #[cfg(feature = "cuda")]
-fn copy_device_to_vec<T>(device: &CudaDevice, slice: &CudaSlice<T>) -> Result<Vec<T>>
+fn copy_device_to_vec<T>(device: &Arc<CudaDevice>, slice: &CudaSlice<T>) -> Result<Vec<T>>
 where
-    T: Copy + Default,
+    T: Copy + DeviceRepr,
 {
-    let mut out = vec![T::default(); slice.len()];
     device
-        .dtoh_copy_sync(slice, &mut out)
-        .map_err(|e| Error::backend(format!("Failed to copy device buffer to host: {}", e)))?;
-    Ok(out)
+        .dtoh_sync_copy(slice)
+        .map_err(|e| Error::backend(format!("Failed to copy device buffer to host: {}", e)))
 }
 
 #[cfg(feature = "cuda")]
-fn copy_vec_to_device<T>(device: &CudaDevice, slice: &mut CudaSlice<T>, data: &[T]) -> Result<()>
+fn copy_vec_to_device<T>(
+    device: &Arc<CudaDevice>,
+    slice: &mut CudaSlice<T>,
+    data: &[T],
+) -> Result<()>
 where
-    T: Copy,
+    T: Copy + DeviceRepr,
 {
     device
-        .htod_copy_sync(slice, data)
+        .htod_sync_copy_into(data, slice)
         .map_err(|e| Error::backend(format!("Failed to copy host buffer to device: {}", e)))
 }
 

@@ -144,16 +144,16 @@ impl CudaTensorOps {
 
         let device = &self.backend.device;
         device
-            .htod_copy_sync(data)
+            .htod_sync_copy(data)
             .map_err(|e| Error::backend(format!("Failed to copy tensor to GPU: {}", e)))
     }
 
     /// Transfer data from GPU
     fn tensor_from_gpu(&self, gpu_data: &CudaSlice<f32>, shape: &Shape) -> Result<Tensor> {
-        let mut cpu_data = vec![0.0f32; shape.num_elements()];
-        self.backend
+        let cpu_data = self
+            .backend
             .device
-            .dtoh_copy_sync(gpu_data, &mut cpu_data)
+            .dtoh_sync_copy(gpu_data)
             .map_err(|e| Error::backend(format!("Failed to copy tensor from GPU: {}", e)))?;
 
         Tensor::new(
