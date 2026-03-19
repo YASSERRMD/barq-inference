@@ -9,13 +9,15 @@ use std::collections::VecDeque;
 
 use barq_core::error::{Error, Result};
 
-/// Active sequence in batch
+/// Active sequence processing state
 #[derive(Debug)]
 pub struct ActiveSequence {
     pub seq_id: i32,
-    pub tokens: Vec<i32>,
+    pub prompt_tokens: Vec<i32>,
+    pub generated_tokens: Vec<i32>,
     pub max_tokens: usize,
-    pub tokens_generated: usize,
+    pub next_pos: i32,
+    pub is_prefill: bool,
     pub response_tx: tokio::sync::oneshot::Sender<Vec<i32>>,
 }
 
@@ -79,33 +81,48 @@ impl BatchScheduler {
         let mut batch_positions = Vec::new();
         let mut batch_seq_id = Vec::new();
 
-        // Process active sequences first
-        for seq in &self.active {
-            for (pos, &token) in seq.tokens.iter().enumerate() {
-                batch_tokens.push(token);
-                batch_positions.push(pos as i32);
-                batch_seq_id.push(seq.seq_id);
-            }
-        }
-
-        // Admit from pending if space available
+        // Admit from pending if space is available and batch is not full
         while self.active.len() < self.max_sequences && !self.pending.is_empty() {
             if let Some(pending) = self.pending.pop_front() {
-                let seq_id = self.active.len() as i32;
-
-                for (pos, &token) in pending.tokens.iter().enumerate() {
-                    batch_tokens.push(token);
-                    batch_positions.push(pos as i32);
-                    batch_seq_id.push(seq_id);
+                // Find unused seq_id
+                let used_ids: std::collections::HashSet<i32> =
+                    self.active.iter().map(|s| s.seq_id).collect();
+                let mut seq_id = 0;
+                while used_ids.contains(&seq_id) {
+                    seq_id += 1;
                 }
 
                 self.active.push(ActiveSequence {
                     seq_id,
-                    tokens: pending.tokens.clone(),
+                    prompt_tokens: pending.tokens,
+                    generated_tokens: Vec::new(),
                     max_tokens: pending.max_tokens,
-                    tokens_generated: 0,
+                    next_pos: 0,
+                    is_prefill: true,
                     response_tx: pending.response_tx,
                 });
+            }
+        }
+
+        // Build actual decode/prefill lists
+        for seq in &mut self.active {
+            if seq.is_prefill {
+                // Prefill: push entire prompt
+                for &token in &seq.prompt_tokens {
+                    batch_tokens.push(token);
+                    batch_positions.push(seq.next_pos);
+                    batch_seq_id.push(seq.seq_id);
+                    seq.next_pos += 1;
+                }
+                seq.is_prefill = false;
+            } else {
+                // Decode: push only the last generated token
+                if let Some(&last_token) = seq.generated_tokens.last() {
+                    batch_tokens.push(last_token);
+                    batch_positions.push(seq.next_pos);
+                    batch_seq_id.push(seq.seq_id);
+                    seq.next_pos += 1;
+                }
             }
         }
 
@@ -117,10 +134,33 @@ impl BatchScheduler {
     }
 
     /// Update sequences after forward pass
-    pub fn update_sequences(&mut self, new_tokens: Vec<i32>) -> Result<()> {
-        // TODO: Implement sequence update logic
-        // For each active sequence, append the generated token
-        // Remove completed sequences
+    pub fn update_sequences(&mut self, new_tokens: &[i32]) -> Result<()> {
+        if new_tokens.len() != self.active.len() {
+            return Err(Error::Backend(format!(
+                "Batch mismatch: {} new tokens for {} active sequences",
+                new_tokens.len(),
+                self.active.len(),
+            )));
+        }
+
+        let mut completed_indices = Vec::new();
+
+        for (idx, seq) in self.active.iter_mut().enumerate() {
+            let token = new_tokens[idx];
+            seq.generated_tokens.push(token);
+
+            // Check if sequence is complete (EOS or max_tokens reached)
+            if token == 0 || token == 2 || seq.generated_tokens.len() >= seq.max_tokens {
+                completed_indices.push(idx);
+            }
+        }
+
+        // Remove completed sequences in reverse order to preserve indices
+        for &idx in completed_indices.iter().rev() {
+            let seq = self.active.remove(idx);
+            let _ = seq.response_tx.send(seq.generated_tokens);
+        }
+
         Ok(())
     }
 
