@@ -242,25 +242,25 @@ This plan addresses the gaps identified in `GAP_ANALYSIS.md` through focused, at
 **Goal:** Production-ready serving capabilities.
 
 ### Phase 24.1: Jinja Chat Templates
-- [ ] Create `vocab/src/chat_template.rs`
-- [ ] Implement Jinja2 template parser
-- [ ] Add common templates (LLaMA, Mistral, Qwen, etc.)
-- [ ] Implement template application
-- [ ] Test with various models
+- [x] Create `vocab/src/chat_template.rs`
+- [x] Implement Jinja2 template parser
+- [x] Add common templates (LLaMA, Mistral, Qwen, etc.)
+- [x] Implement template application
+- [x] Test with various models
 
 ### Phase 24.2: HTTP Server
-- [ ] Create `cli/src/server.rs`
-- [ ] Implement `/v1/chat/completions` endpoint
-- [ ] Implement `/v1/completions` endpoint
-- [ ] Add streaming support (SSE)
-- [ ] Add CORS support
+- [x] Create `cli/src/server.rs`
+- [x] Implement `/v1/chat/completions` endpoint
+- [x] Implement `/v1/completions` endpoint
+- [x] Add streaming support (SSE)
+- [x] Add CORS support
 
 ### Phase 24.3: OpenAI API Compatibility
-- [ ] Implement `/v1/models` endpoint
-- [ ] Implement `/v1/responses` (ik_llama.cpp style)
-- [ ] Add token counting
-- [ ] Add rate limiting
-- [ ] Document API compatibility
+- [x] Implement `/v1/models` endpoint
+- [x] Implement `/v1/responses` (ik_llama.cpp style)
+- [x] Add token counting
+- [x] Add rate limiting
+- [x] Document API compatibility
 
 ---
 
@@ -431,9 +431,9 @@ Each phase.X.Y gets its own branch, commits are atomic, and branches are pushed 
 | 23.1 | Done | phase_23_flashmla_moe | FlashMLA |
 | 23.2 | Done | phase_23_flashmla_moe | MoE fused ops |
 | 23.3 | Done | phase_23_flashmla_moe | Smart Expert Reduction |
-| 24.1 | Pending | - | Jinja templates |
-| 24.2 | Pending | - | HTTP server |
-| 24.3 | Pending | - | OpenAI API |
+| 24.1 | Done | phase_24_chat_templates_server | Jinja templates |
+| 24.2 | Done | phase_24_chat_templates_server | HTTP server |
+| 24.3 | Done | phase_24_chat_templates_server | OpenAI API |
 | 25.1 | Pending | - | Unit tests |
 | 25.2 | Pending | - | Integration tests |
 | 25.3 | Pending | - | Benchmarks |
