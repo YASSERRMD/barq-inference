@@ -20,6 +20,7 @@ use std::sync::Arc;
 /// - SwiGLU activation
 pub struct DeepSeekModel {
     model: Arc<Model>,
+    transformer: Arc<crate::transformer::LlamaTransformer>,
 }
 
 impl DeepSeekModel {
@@ -32,12 +33,18 @@ impl DeepSeekModel {
             )));
         }
 
-        Ok(Self { model })
+        let transformer = Arc::new(crate::transformer::LlamaTransformer::new(model.clone())?);
+
+        Ok(Self { model, transformer })
     }
 
     /// Create an inference context
     pub fn create_context(&self, params: ContextParams) -> Result<ModelContext> {
-        ModelContext::new(Arc::clone(&self.model), params)
+        ModelContext::new(
+            Arc::clone(&self.model),
+            params,
+            Arc::clone(&self.transformer),
+        )
     }
 
     /// Returns the model
@@ -93,6 +100,7 @@ impl DeepSeekModel {
 /// - Auxiliary loss load balancing
 pub struct DeepSeekMoEModel {
     model: Arc<Model>,
+    transformer: Arc<crate::transformer::LlamaTransformer>,
 }
 
 impl DeepSeekMoEModel {
@@ -105,12 +113,18 @@ impl DeepSeekMoEModel {
             )));
         }
 
-        Ok(Self { model })
+        let transformer = Arc::new(crate::transformer::LlamaTransformer::new(model.clone())?);
+
+        Ok(Self { model, transformer })
     }
 
     /// Create an inference context
     pub fn create_context(&self, params: ContextParams) -> Result<ModelContext> {
-        ModelContext::new(Arc::clone(&self.model), params)
+        ModelContext::new(
+            Arc::clone(&self.model),
+            params,
+            Arc::clone(&self.transformer),
+        )
     }
 
     /// Returns the model

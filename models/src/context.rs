@@ -283,7 +283,11 @@ impl KVCache {
 
 impl ModelContext {
     /// Create a new inference context
-    pub fn new(model: Arc<Model>, params: ContextParams) -> Result<Self> {
+    pub fn new(
+        model: Arc<Model>,
+        params: ContextParams,
+        transformer: Arc<crate::transformer::LlamaTransformer>,
+    ) -> Result<Self> {
         let n_ctx = if params.n_ctx == 0 {
             model.hparams.n_ctx_train as usize
         } else {
@@ -293,9 +297,6 @@ impl ModelContext {
         let n_layer = model.hparams.n_layer as usize;
         let n_head_kv = model.hparams.n_head_kv as usize;
         let kv_cache = KVCache::new(n_ctx, n_layer, n_head_kv);
-
-        // Build transformer + weight cache ONCE
-        let transformer = Arc::new(crate::transformer::LlamaTransformer::new(model.clone())?);
 
         Ok(Self {
             model,
@@ -307,8 +308,11 @@ impl ModelContext {
     }
 
     /// Create context with default parameters
-    pub fn with_model(model: Arc<Model>) -> Result<Self> {
-        Self::new(model, ContextParams::default())
+    pub fn with_model(
+        model: Arc<Model>,
+        transformer: Arc<crate::transformer::LlamaTransformer>,
+    ) -> Result<Self> {
+        Self::new(model, ContextParams::default(), transformer)
     }
 
     /// Encode a batch of tokens (no KV cache)

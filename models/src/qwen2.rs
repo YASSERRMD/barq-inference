@@ -16,6 +16,7 @@ use std::sync::Arc;
 /// Qwen2 model specific implementations
 pub struct Qwen2Model {
     model: Arc<Model>,
+    transformer: Arc<crate::transformer::LlamaTransformer>,
 }
 
 impl Qwen2Model {
@@ -28,12 +29,18 @@ impl Qwen2Model {
             )));
         }
 
-        Ok(Self { model })
+        let transformer = Arc::new(crate::transformer::LlamaTransformer::new(model.clone())?);
+
+        Ok(Self { model, transformer })
     }
 
     /// Create an inference context
     pub fn create_context(&self, params: ContextParams) -> Result<ModelContext> {
-        ModelContext::new(Arc::clone(&self.model), params)
+        ModelContext::new(
+            Arc::clone(&self.model),
+            params,
+            Arc::clone(&self.transformer),
+        )
     }
 
     /// Returns the model
@@ -61,6 +68,7 @@ impl Qwen2Model {
 /// Qwen2MoE model (Mixture of Experts variant)
 pub struct Qwen2MoEModel {
     model: Arc<Model>,
+    transformer: Arc<crate::transformer::LlamaTransformer>,
 }
 
 impl Qwen2MoEModel {
@@ -73,12 +81,18 @@ impl Qwen2MoEModel {
             )));
         }
 
-        Ok(Self { model })
+        let transformer = Arc::new(crate::transformer::LlamaTransformer::new(model.clone())?);
+
+        Ok(Self { model, transformer })
     }
 
     /// Create an inference context
     pub fn create_context(&self, params: ContextParams) -> Result<ModelContext> {
-        ModelContext::new(Arc::clone(&self.model), params)
+        ModelContext::new(
+            Arc::clone(&self.model),
+            params,
+            Arc::clone(&self.transformer),
+        )
     }
 
     /// Returns the model
