@@ -504,6 +504,10 @@ impl AdvancedKVCache {
 mod tests {
     use super::*;
 
+    fn tensor_from_values(values: Vec<f32>, shape: Shape) -> Tensor {
+        Tensor::new(None, TensorType::F32, shape, TensorData::F32(values)).unwrap()
+    }
+
     #[test]
     fn test_kv_cache_creation() {
         let cache = AdvancedKVCache::new(32, 128, 1024);
@@ -632,5 +636,107 @@ mod tests {
 
         assert!(cache.is_empty());
         assert_eq!(cache.len(), 0);
+    }
+
+    #[test]
+    fn test_kv_cache_q8_roundtrip() {
+        let mut cache = AdvancedKVCache::new(2, 64, 4).with_q8_kv();
+
+        let shape = Shape::new(vec![2, 64]);
+        let k_values: Vec<f32> = (0..128).map(|i| (i as f32 - 64.0) / 32.0).collect();
+        let v_values: Vec<f32> = (0..128).map(|i| ((i as f32 % 17.0) - 8.0) / 24.0).collect();
+
+        cache
+            .insert(
+                0,
+                tensor_from_values(k_values.clone(), shape.clone()),
+                tensor_from_values(v_values.clone(), shape.clone()),
+            )
+            .unwrap();
+
+        assert_eq!(cache.quantization(), KVCacheQuantization::Q8KV);
+
+        let result = cache.get(0).unwrap();
+        assert!(result.is_some());
+
+        let (k, v) = result.unwrap();
+        assert_eq!(k.shape().dims(), shape.dims());
+        assert_eq!(v.shape().dims(), shape.dims());
+
+        let k_data = k.as_f32_slice().unwrap();
+        let v_data = v.as_f32_slice().unwrap();
+
+        for (orig, deq) in k_values.iter().zip(k_data.iter()) {
+            assert!((orig - deq).abs() < 0.05);
+        }
+
+        for (orig, deq) in v_values.iter().zip(v_data.iter()) {
+            assert!((orig - deq).abs() < 0.05);
+        }
+    }
+
+    #[test]
+    fn test_kv_cache_q8_memory_savings() {
+        let shape = Shape::new(vec![2, 64]);
+        let k_values: Vec<f32> = (0..128).map(|i| (i as f32 - 64.0) / 32.0).collect();
+        let v_values: Vec<f32> = (0..128).map(|i| ((i as f32 % 17.0) - 8.0) / 24.0).collect();
+
+        let mut dense_cache = AdvancedKVCache::new(2, 64, 4);
+        dense_cache
+            .insert(
+                0,
+                tensor_from_values(k_values.clone(), shape.clone()),
+                tensor_from_values(v_values.clone(), shape.clone()),
+            )
+            .unwrap();
+
+        let mut quant_cache = AdvancedKVCache::new(2, 64, 4).with_q8_kv();
+        quant_cache
+            .insert(
+                0,
+                tensor_from_values(k_values, shape.clone()),
+                tensor_from_values(v_values, shape),
+            )
+            .unwrap();
+
+        assert!(quant_cache.memory_bytes() < dense_cache.memory_bytes());
+        assert!(quant_cache.compression_ratio() < 1.0);
+        assert!(quant_cache.memory_savings_ratio() > 0.7);
+    }
+
+    #[test]
+    fn test_kv_cache_q8_defragmentation_preserves_mapping() {
+        let mut cache = AdvancedKVCache::new(2, 64, 4).with_q8_kv();
+
+        let shape = Shape::new(vec![2, 64]);
+        let k_one: Vec<f32> = (0..128).map(|i| (i as f32 - 32.0) / 48.0).collect();
+        let v_one: Vec<f32> = (0..128).map(|i| ((i as f32 % 9.0) - 4.0) / 16.0).collect();
+        let k_two: Vec<f32> = (0..128).map(|i| (i as f32 - 16.0) / 40.0).collect();
+        let v_two: Vec<f32> = (0..128).map(|i| ((i as f32 % 11.0) - 5.0) / 20.0).collect();
+
+        cache
+            .insert(
+                5,
+                tensor_from_values(k_one.clone(), shape.clone()),
+                tensor_from_values(v_one.clone(), shape.clone()),
+            )
+            .unwrap();
+        cache
+            .insert(
+                1,
+                tensor_from_values(k_two.clone(), shape.clone()),
+                tensor_from_values(v_two.clone(), shape.clone()),
+            )
+            .unwrap();
+
+        cache.defragment().unwrap();
+
+        let first = cache.get(1).unwrap().unwrap();
+        let second = cache.get(5).unwrap().unwrap();
+
+        assert_eq!(first.0.shape().dims(), shape.dims());
+        assert_eq!(second.1.shape().dims(), shape.dims());
+        assert_eq!(cache.len(), 2);
+        assert_eq!(cache.stats().defrag_count, 1);
     }
 }
