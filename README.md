@@ -4,16 +4,16 @@ High-performance LLM inference engine implemented in Rust, inspired by llama.cpp
 
 ## Overview
 
-Barq Inference is a production-ready LLM inference engine that delivers 1.5-2x speedup while maintaining full compatibility with GGUF models. This project is a complete Rust reimplementation inspired by [llama.cpp](https://github.com/ggerganov/llama.cpp) and [ik_llama.cpp](https://github.com/ikawrakow/ik_llama.cpp), incorporating their architectural innovations and optimization techniques. Built from scratch in Rust, it provides memory safety, zero-cost abstractions, and modern async I/O throughout.
+Barq Inference is a Rust-native LLM inference engine with GGUF support, OpenAI-compatible server endpoints, a built-in JSON mode, and a growing multimodal foundation. It is inspired by [llama.cpp](https://github.com/ggerganov/llama.cpp) and [ik_llama.cpp](https://github.com/ikawrakow/ik_llama.cpp), but is implemented from scratch in Rust so it can lean on memory safety, async I/O, and zero-cost abstractions throughout the stack.
 
-The implementation draws from research and optimizations including Flash Attention, SIMD-accelerated quantization kernels, advanced KV cache management, and speculative decoding to achieve superior inference performance.
+The implementation combines research-backed optimizations such as Flash Attention, SIMD-accelerated quantization kernels, advanced KV cache management, speculative decoding, and architecture-specific backends for CPU, CUDA, and Metal.
 
 ## Features
 
 ### Core Capabilities
 
 **Model Support**
-- 100+ LLM architectures: LLaMA, LLaMA 2/3, Mistral, Mixtral, Qwen, GPT-2, BERT, T5, Bloom, Falcon, and more
+- 100+ LLM architectures: LLaMA, LLaMA 2/3, Mistral, Mixtral, Qwen, Qwen2, Qwen2-VL, Qwen3, LLaVA, GPT-2, BERT, T5, Bloom, Falcon, and more
 - GGUF file format for efficient model loading
 - Multiple tokenization methods: SentencePiece, BPE, WordPiece, Unigram
 - Support for models from 7B to 405B parameters
@@ -23,7 +23,8 @@ The implementation draws from research and optimizations including Flash Attenti
 - LLaMA / LLaMA 2 / LLaMA 3
 - Mistral
 - Mixtral
-- Qwen / Qwen2 / Qwen2-MoE / Qwen3
+- Qwen / Qwen2 / Qwen2-MoE / Qwen2-VL / Qwen3
+- LLaVA vision-language models
 - DeepSeek / DeepSeek-MoE
 - Other GGUF families through the shared loader and registry, including GPT-2, BERT, T5, Bloom, Falcon, MPT, Phi, Gemma, and StarCoder2
 
@@ -77,6 +78,11 @@ The implementation draws from research and optimizations including Flash Attenti
 - FlashMLA context expansion for DeepSeek and DeepSeek-MoE models
 - Fused MoE dispatch helpers for batched expert execution
 - Smart expert reduction for pruning low-value expert paths at runtime
+
+**Multimodal Foundation**
+- Vision encoder scaffolding for CLIP-style patch embeddings
+- Image preprocessing helpers for resize and normalization
+- Qwen2-VL and LLaVA model wrappers for future image-token fusion
 
 ### Performance Optimizations
 
@@ -178,6 +184,11 @@ Streaming responses use Server-Sent Events, and CORS is enabled by default for b
 
 `/v1/responses` accepts either a plain `input` prompt or a `messages` array, and the server reports token usage for the rendered prompt and generated completion. Per-client rate limiting is enforced with a token bucket keyed by IP address.
 
+**Documentation**
+- [User Guide](docs/USER_GUIDE.md)
+- [Performance Guide](docs/PERFORMANCE.md)
+- [Migration Guide](docs/MIGRATION.md)
+
 ### Rust API
 
 ```rust
@@ -269,16 +280,13 @@ barq-inference/
 
 ## Performance
 
-This is a new implementation currently under active development. Performance benchmarks will be added once the core functionality is complete and tested.
+See [docs/PERFORMANCE.md](docs/PERFORMANCE.md) for current tuning guidance.
 
-Expected optimizations based on the implementation:
-- SIMD-accelerated operations (AVX-512, ARM NEON)
-- Efficient quantization support
-- Async I/O with Tokio
-- GPU acceleration support (CUDA, Metal)
-- Cache-aware algorithms
+The main benchmark entry points are:
 
-If you would like to run benchmarks, see the `examples/benchmark.rs` file for a template.
+- `barq-inference benchmark -m model.gguf --iterations 10`
+- `cargo bench -p barq-inference --benches --no-run`
+- `cargo test -p barq-inference --test integration_tests --quiet`
 
 ## Development
 
@@ -316,12 +324,12 @@ cargo bench
 - Phase 22: Metal backend (Apple Silicon GPU support, unified memory)
 - Phase 23-24: Network API and monitoring
 - Phase 25: Testing infrastructure (comprehensive test suite, benchmarks)
-- Phase 26: Packaging and release automation
-- Phase 27: Documentation and examples (user guide, performance guide)
+- Phase 26: Multimodal foundation (vision encoder, Qwen2-VL, LLaVA)
+- Phase 27: Documentation and polish (user guide, performance guide, migration guide, developer docs)
 
 ## Contributing
 
-Contributions are welcome. The project follows atomic commit practices with each logical change committed separately.
+Contributions are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md) for the workflow, testing expectations, and phase-branch process.
 
 ## License
 
