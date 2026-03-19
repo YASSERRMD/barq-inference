@@ -395,6 +395,42 @@ async fn main() -> anyhow::Result<()> {
     }
 }
 
+fn create_context_for_model(
+    model: std::sync::Arc<models::loader::Model>,
+    params: models::context::ContextParams,
+) -> anyhow::Result<models::context::ModelContext> {
+    use models::{
+        deepseek::{DeepSeekMoEModel, DeepSeekModel},
+        llama::LlamaModel,
+        mistral::MistralModel,
+        mixtral::MixtralModel,
+        qwen::QwenModel,
+        qwen2::{Qwen2MoEModel, Qwen2Model},
+        qwen3::Qwen3Model,
+    };
+
+    let arch = model.arch();
+    let context = match arch {
+        models::LlmArch::Llama => LlamaModel::new(model)?.create_context(params)?,
+        models::LlmArch::Mistral => MistralModel::new(model)?.create_context(params)?,
+        models::LlmArch::Mixtral => MixtralModel::new(model)?.create_context(params)?,
+        models::LlmArch::Qwen => QwenModel::new(model)?.create_context(params)?,
+        models::LlmArch::Qwen2 => Qwen2Model::new(model)?.create_context(params)?,
+        models::LlmArch::Qwen2Moe => Qwen2MoEModel::new(model)?.create_context(params)?,
+        models::LlmArch::Qwen3 => Qwen3Model::new(model)?.create_context(params)?,
+        models::LlmArch::DeepSeek => DeepSeekModel::new(model)?.create_context(params)?,
+        models::LlmArch::DeepSeekMoE => DeepSeekMoEModel::new(model)?.create_context(params)?,
+        _ => {
+            return Err(anyhow::anyhow!(
+                "Unsupported architecture {:?} for inference",
+                arch
+            ))
+        }
+    };
+
+    Ok(context)
+}
+
 async fn cmd_run(
     model: PathBuf,
     draft_model: Option<PathBuf>,
@@ -415,7 +451,6 @@ async fn cmd_run(
 ) -> anyhow::Result<()> {
     use models::{
         context::{Batch, ContextParams},
-        llama::LlamaModel,
         loader::Model,
     };
     use sampling::{JsonMode, JsonSchema};
@@ -459,7 +494,6 @@ async fn cmd_run(
 
     // Create inference context
     let model_arc = Arc::new(loaded_model);
-    let llama_model = LlamaModel::new(model_arc.clone())?;
     let mut params = ContextParams {
         n_ctx: context_size as u32,
         n_threads: threads.max(1) as u32,
@@ -506,7 +540,7 @@ async fn cmd_run(
         }
     }
 
-    let context = llama_model.create_context(params)?;
+    let context = create_context_for_model(Arc::clone(&model_arc), params)?;
     info!("Context created");
 
     // Generate tokens
@@ -624,7 +658,6 @@ async fn cmd_benchmark(
     use benchmark::{BenchmarkConfig, InferenceBenchmark};
     use models::{
         context::{Batch, ContextParams},
-        llama::LlamaModel,
         loader::Model,
     };
     use std::sync::Arc;
@@ -646,7 +679,6 @@ async fn cmd_benchmark(
 
     let bench = InferenceBenchmark::with_config(config.clone());
     let model_arc = Arc::new(Model::load(&model).await?);
-    let llama_model = Arc::new(LlamaModel::new(model_arc.clone())?);
     let tokenizer = Arc::new(GgufTokenizer::from_gguf(model_arc.metadata()));
     let synthetic_prompt = std::iter::repeat("barq")
         .take(prompt_length.max(1))
@@ -661,7 +693,7 @@ async fn cmd_benchmark(
     };
 
     let result = bench.run({
-        let llama_model = Arc::clone(&llama_model);
+        let model_arc = Arc::clone(&model_arc);
         let tokenizer = Arc::clone(&tokenizer);
         let synthetic_prompt = synthetic_prompt.clone();
         move || {
@@ -669,9 +701,9 @@ async fn cmd_benchmark(
                 let handle = tokio::runtime::Handle::current();
                 let start = std::time::Instant::now();
 
-                let context = llama_model
-                    .create_context(context_params.clone())
-                    .map_err(|e| boxed_error(e.to_string()))?;
+                let context =
+                    create_context_for_model(Arc::clone(&model_arc), context_params.clone())
+                        .map_err(|e| boxed_error(e.to_string()))?;
 
                 let tokenization_result = handle
                     .block_on(tokenizer.tokenize(&synthetic_prompt, true))
