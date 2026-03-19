@@ -41,6 +41,7 @@ models = { path = "../models" }
 backend = { path = "../backend" }
 sampling = { path = "../sampling" }
 advanced = { path = "../advanced" }
+quant = { path = "../quant" }
 
 [features]
 default = []

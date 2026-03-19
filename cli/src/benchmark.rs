@@ -7,7 +7,7 @@
 //! - KV cache hit rate
 
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// Benchmark result metrics
 #[derive(Debug, Clone)]
@@ -85,6 +85,17 @@ pub struct BenchmarkConfig {
     pub measure_memory: bool,
 }
 
+/// Result returned by an inference benchmark sample.
+#[derive(Debug, Clone)]
+pub struct BenchmarkSample {
+    /// Number of tokens processed in the run.
+    pub total_tokens: usize,
+    /// Total elapsed time for the run.
+    pub total_time: Duration,
+    /// Time to first token for the run.
+    pub ttft: Duration,
+}
+
 impl Default for BenchmarkConfig {
     fn default() -> Self {
         Self {
@@ -119,13 +130,13 @@ impl InferenceBenchmark {
     /// Run inference benchmark
     ///
     /// # Arguments
-    /// * `inference_fn` - Function that performs inference and returns token count
+    /// * `inference_fn` - Function that performs inference and returns a benchmark sample
     ///
     /// # Returns
     /// Benchmark results with TPS metrics
     pub fn run<F>(&self, mut inference_fn: F) -> BenchmarkResult
     where
-        F: FnMut() -> Result<(usize, Duration), Box<dyn std::error::Error>>,
+        F: FnMut() -> Result<BenchmarkSample, Box<dyn std::error::Error>>,
     {
         let mut tps_samples = Vec::with_capacity(self.config.runs);
         let mut total_tokens = 0;
@@ -139,22 +150,21 @@ impl InferenceBenchmark {
 
         // Actual benchmark runs
         for run in 0..self.config.runs {
-            let start = Instant::now();
             match inference_fn() {
-                Ok((num_tokens, elapsed)) => {
-                    let tps = if elapsed.as_secs_f64() > 0.0 {
-                        num_tokens as f64 / elapsed.as_secs_f64()
+                Ok(sample) => {
+                    let tps = if sample.total_time.as_secs_f64() > 0.0 {
+                        sample.total_tokens as f64 / sample.total_time.as_secs_f64()
                     } else {
                         0.0
                     };
 
                     tps_samples.push(tps);
-                    total_tokens += num_tokens;
-                    total_time += elapsed;
+                    total_tokens += sample.total_tokens;
+                    total_time += sample.total_time;
 
                     // First run is used for TTFT measurement
                     if run == 0 && self.config.measure_ttft {
-                        ttft = elapsed;
+                        ttft = sample.ttft;
                     }
                 }
                 Err(e) => {
