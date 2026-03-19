@@ -311,6 +311,7 @@ impl MoEFusedOps {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use barq_core::testing::{BenchmarkTimer, TensorAssertions};
 
     fn tensor_from_rows(rows: usize, cols: usize, values: Vec<f32>) -> Tensor {
         Tensor::new(
@@ -390,6 +391,127 @@ mod tests {
         assert_eq!(
             output.as_f32_slice().unwrap(),
             &[2.0, 4.0, 6.0, 12.0, 15.0, 18.0]
+        );
+    }
+
+    fn naive_dispatch(
+        input: &Tensor,
+        expert_ffns: &[Box<dyn Fn(&Tensor) -> Result<Tensor> + Send + Sync>],
+        expert_ids: &[Vec<usize>],
+        expert_weights: &[Vec<f32>],
+    ) -> Result<Tensor> {
+        let hidden = input.shape().dims()[1];
+        let input_data = input.as_f32_slice()?;
+        let mut output = vec![0.0f32; input.shape().num_elements()];
+
+        for (token_idx, (ids, weights)) in expert_ids.iter().zip(expert_weights.iter()).enumerate()
+        {
+            let token = tensor_from_rows(
+                1,
+                hidden,
+                input_data[token_idx * hidden..(token_idx + 1) * hidden].to_vec(),
+            );
+
+            for (expert_id, weight) in ids.iter().zip(weights.iter()) {
+                let expert_output = expert_ffns[*expert_id](&token)?;
+                let row = expert_output.as_f32_slice()?;
+                let out_row = &mut output[token_idx * hidden..(token_idx + 1) * hidden];
+                for (dst, src) in out_row.iter_mut().zip(row.iter()) {
+                    *dst += src * *weight;
+                }
+            }
+        }
+
+        Tensor::new(
+            None,
+            TensorType::F32,
+            input.shape().clone(),
+            TensorData::F32(output),
+        )
+    }
+
+    #[test]
+    fn benchmark_dispatch_experts_speedup() {
+        let input = tensor_from_rows(32, 16, (0..512).map(|i| (i as f32 % 13.0) / 13.0).collect());
+
+        let expert_ffns: Vec<Box<dyn Fn(&Tensor) -> Result<Tensor> + Send + Sync>> = vec![
+            Box::new(|tensor: &Tensor| {
+                let values = tensor
+                    .as_f32_slice()?
+                    .iter()
+                    .map(|v| v * 2.0)
+                    .collect::<Vec<_>>();
+                Tensor::new(
+                    None,
+                    TensorType::F32,
+                    tensor.shape().clone(),
+                    TensorData::F32(values),
+                )
+            }),
+            Box::new(|tensor: &Tensor| {
+                let values = tensor
+                    .as_f32_slice()?
+                    .iter()
+                    .map(|v| v * 3.0)
+                    .collect::<Vec<_>>();
+                Tensor::new(
+                    None,
+                    TensorType::F32,
+                    tensor.shape().clone(),
+                    TensorData::F32(values),
+                )
+            }),
+            Box::new(|tensor: &Tensor| {
+                let values = tensor
+                    .as_f32_slice()?
+                    .iter()
+                    .map(|v| v * 4.0)
+                    .collect::<Vec<_>>();
+                Tensor::new(
+                    None,
+                    TensorType::F32,
+                    tensor.shape().clone(),
+                    TensorData::F32(values),
+                )
+            }),
+            Box::new(|tensor: &Tensor| {
+                let values = tensor
+                    .as_f32_slice()?
+                    .iter()
+                    .map(|v| v * 5.0)
+                    .collect::<Vec<_>>();
+                Tensor::new(
+                    None,
+                    TensorType::F32,
+                    tensor.shape().clone(),
+                    TensorData::F32(values),
+                )
+            }),
+        ];
+
+        let expert_ids: Vec<Vec<usize>> = (0..32)
+            .map(|token_idx| vec![token_idx % 4, (token_idx + 1) % 4])
+            .collect();
+        let expert_weights: Vec<Vec<f32>> = (0..32).map(|_| vec![0.7, 0.3]).collect();
+
+        let (fused_output, fused_secs) = BenchmarkTimer::measure(|| {
+            MoEFusedOps::dispatch_experts(&input, &expert_ffns, &expert_ids, &expert_weights)
+                .unwrap()
+        });
+        let (naive_output, naive_secs) = BenchmarkTimer::measure(|| {
+            naive_dispatch(&input, &expert_ffns, &expert_ids, &expert_weights).unwrap()
+        });
+
+        TensorAssertions::assert_close(&fused_output, &naive_output, 1e-6);
+        println!(
+            "MoE fused dispatch benchmark: fused={:.3}ms naive={:.3}ms speedup={:.2}x",
+            fused_secs * 1000.0,
+            naive_secs * 1000.0,
+            if fused_secs > 0.0 {
+                naive_secs / fused_secs
+            } else {
+                0.0
+            }
         );
     }
 }
