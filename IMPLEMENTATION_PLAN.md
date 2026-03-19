@@ -296,18 +296,18 @@ This plan addresses the gaps identified in `GAP_ANALYSIS.md` through focused, at
 **Goal:** Enable vision-language model support.
 
 ### Phase 26.1: Vision Encoder Interface
-- [ ] Create `models/src/vision/mod.rs`
-- [ ] Define vision encoder trait
-- [ ] Add CLIP-like encoder support
-- [ ] Add image preprocessing
-- [ ] Test embedding extraction
+- [x] Create `models/src/vision/mod.rs`
+- [x] Define vision encoder trait
+- [x] Add CLIP-like encoder support
+- [x] Add image preprocessing
+- [x] Test embedding extraction
 
 ### Phase 26.2: Vision-Language Models
-- [ ] Create `models/src/arch/qwen2vl.rs`
-- [ ] Create `models/src/arch/llava.rs`
-- [ ] Implement cross-attention
-- [ ] Add image token handling
-- [ ] Test with multimodal GGUF
+- [x] Create `models/src/qwen2vl.rs`
+- [x] Create `models/src/llava.rs`
+- [x] Implement cross-attention
+- [x] Add image token handling
+- [x] Test with multimodal GGUF
 
 ---
 
@@ -437,8 +437,8 @@ Each phase.X.Y gets its own branch, commits are atomic, and branches are pushed 
 | 25.1 | Done | phase_25_testing_infra | Unit tests |
 | 25.2 | Done | phase_25_testing_infra | Integration tests |
 | 25.3 | Done | phase_25_testing_infra | Benchmarks |
-| 26.1 | Pending | - | Vision encoder |
-| 26.2 | Pending | - | VL models |
+| 26.1 | Done | phase_26_multimodal_foundation | Vision encoder |
+| 26.2 | Done | phase_26_multimodal_foundation | VL models |
 | 27.1 | Pending | - | API docs |
 | 27.2 | Pending | - | User docs |
 | 27.3 | Pending | - | Dev docs |
