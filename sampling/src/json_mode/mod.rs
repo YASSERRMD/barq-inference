@@ -5,6 +5,7 @@
 use barq_core::grammar::GrammarCompiler;
 use barq_core::grammar::{Grammar, GrammarError, GrammarParser, GrammarRule};
 use std::collections::HashMap;
+use vocab::Vocab;
 
 /// JSON mode for constrained JSON output
 pub struct JsonMode;
@@ -52,8 +53,23 @@ null ::= "null"
         vocab_size: usize,
     ) -> Result<crate::grammar_sampler::GrammarSampler, GrammarError> {
         let gbnf = Self::schema_to_gbnf(schema);
-        let grammar = GrammarParser::parse(&gbnf)?;
-        crate::grammar_sampler::GrammarSampler::new(grammar, vocab_size)
+        crate::grammar_sampler::GrammarSamplerBuilder::new(vocab_size).from_gbnf(&gbnf)
+    }
+
+    /// Create a grammar sampler from JSON schema using the loaded vocabulary.
+    pub fn create_sampler_with_vocab(
+        schema: &JsonSchema,
+        vocab: &Vocab,
+    ) -> Result<crate::grammar_sampler::GrammarSampler, GrammarError> {
+        let gbnf = Self::schema_to_gbnf(schema);
+        crate::grammar_sampler::GrammarSamplerBuilder::new(vocab.len())
+            .from_gbnf_with_vocab(&gbnf, vocab)
+    }
+
+    /// Validate generated JSON output and return the parsed value.
+    pub fn validate_output(output: &str) -> Result<serde_json::Value, GrammarError> {
+        serde_json::from_str(output.trim())
+            .map_err(|err| GrammarError::InvalidJsonOutput(err.to_string()))
     }
 
     /// Create grammar for JSON object
@@ -195,5 +211,40 @@ mod tests {
         assert_eq!(JsonSchema::Number.root_type(), "number");
         assert_eq!(JsonSchema::Boolean.root_type(), "boolean");
         assert_eq!(JsonSchema::Null.root_type(), "null");
+    }
+
+    #[test]
+    fn test_validate_output() {
+        let parsed = JsonMode::validate_output(r#"{"name":"barq"}"#).unwrap();
+        assert!(parsed.is_object());
+    }
+
+    #[test]
+    fn test_create_sampler_with_vocab() {
+        use vocab::{Token, TokenAttr, TokenType, Vocab, VocabType};
+
+        let mut vocab = Vocab::new(VocabType::SPM);
+        vocab.add_token(Token {
+            id: 0,
+            text: "{".to_string(),
+            score: 0.0,
+            token_type: TokenType::Normal,
+            attrs: TokenAttr::default(),
+        });
+        vocab.add_token(Token {
+            id: 1,
+            text: "}".to_string(),
+            score: 0.0,
+            token_type: TokenType::Normal,
+            attrs: TokenAttr::default(),
+        });
+
+        let schema = JsonSchema::Object {
+            properties: vec![],
+            required: vec![],
+        };
+
+        let sampler = JsonMode::create_sampler_with_vocab(&schema, &vocab).unwrap();
+        assert!(!sampler.get_allowed_tokens().is_empty());
     }
 }

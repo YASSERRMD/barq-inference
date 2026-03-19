@@ -54,11 +54,11 @@ This plan addresses the gaps identified in `GAP_ANALYSIS.md` through focused, at
 **Goal:** Support the most commonly used model architectures.
 
 ### Phase 18.1: Qwen Architecture Family
-- [ ] Create `models/src/arch/qwen.rs` for Qwen base
-- [ ] Create `models/src/arch/qwen2.rs` for Qwen2
-- [ ] Create `models/src/arch/qwen3.rs` for Qwen3
-- [ ] Implement RoPE with NTK-aware scaling
-- [ ] Add GQA support for Qwen models
+- [x] Create `models/src/qwen.rs` for Qwen base
+- [x] Create `models/src/qwen2.rs` for Qwen2
+- [x] Create `models/src/qwen3.rs` for Qwen3
+- [x] Implement RoPE with NTK-aware scaling
+- [x] Add GQA support for Qwen models
 - [ ] Add test GGUF files
 
 ### Phase 18.2: DeepSeek Architecture
@@ -76,10 +76,10 @@ This plan addresses the gaps identified in `GAP_ANALYSIS.md` through focused, at
 - [ ] Add benchmarking
 
 ### Phase 18.4: Architecture Registry
-- [ ] Create `models/src/arch_registry.rs`
-- [ ] Map GGUF architecture names to implementations
-- [ ] Add architecture detection from metadata
-- [ ] Create unified `LlmArch` trait
+- [x] Create `models/src/arch_registry.rs`
+- [x] Map GGUF architecture names to implementations
+- [x] Add architecture detection from metadata
+- [x] Create unified `LlmArch` trait
 - [ ] Document all supported architectures
 
 ---
@@ -89,25 +89,25 @@ This plan addresses the gaps identified in `GAP_ANALYSIS.md` through focused, at
 **Goal:** Enable structured output generation.
 
 ### Phase 19.1: Grammar Parser
-- [ ] Create `barq_core/src/grammar/` module
-- [ ] Implement GBNF (GGML BNF) parser
-- [ ] Add grammar AST representation
-- [ ] Implement grammar compilation
-- [ ] Add unit tests
+- [x] Create `barq_core/src/grammar/` module
+- [x] Implement GBNF (GGML BNF) parser
+- [x] Add grammar AST representation
+- [x] Implement grammar compilation
+- [x] Add unit tests
 
 ### Phase 19.2: Grammar-Guided Sampling
-- [ ] Create `sampling/src/grammar_sampler.rs`
-- [ ] Implement token masking from grammar
-- [ ] Add grammar state tracking
-- [ ] Integrate with existing sampler chain
-- [ ] Test with JSON grammar
+- [x] Create `sampling/src/grammar_sampler.rs`
+- [x] Implement token masking from grammar
+- [x] Add grammar state tracking
+- [x] Integrate with existing sampler chain
+- [x] Test with JSON grammar
 
 ### Phase 19.3: JSON Mode
-- [ ] Create `sampling/src/json_mode.rs`
-- [ ] Implement JSON schema to grammar conversion
-- [ ] Add `--json` CLI flag
-- [ ] Add validation of output
-- [ ] Document usage
+- [x] Create `sampling/src/json_mode/mod.rs`
+- [x] Implement JSON schema to grammar conversion
+- [x] Add `--json` CLI flag
+- [x] Add validation of output
+- [x] Document usage
 
 ---
 
@@ -402,17 +402,17 @@ Each phase.X.Y gets its own branch, commits are atomic, and branches are pushed 
 
 | Phase | Status | Branch | Key Deliverable |
 |-------|--------|--------|-----------------|
-| 17.1 | Pending | - | Q2_K, Q3_K quantization |
-| 17.2 | Pending | - | Q5_K quantization |
-| 17.3 | Pending | - | IK quantization |
-| 17.4 | Pending | - | KV cache quantization |
-| 18.1 | Pending | - | Qwen architecture |
+| 17.1 | Done | main | Q2_K, Q3_K quantization |
+| 17.2 | Done | main | Q5_K quantization |
+| 17.3 | Done | main | IK quantization |
+| 17.4 | Done | main | KV cache quantization |
+| 18.1 | Done | main | Qwen architecture |
 | 18.2 | Pending | - | DeepSeek architecture |
 | 18.3 | Pending | - | Mistral improvements |
-| 18.4 | Pending | - | Architecture registry |
-| 19.1 | Pending | - | Grammar parser |
-| 19.2 | Pending | - | Grammar sampling |
-| 19.3 | Pending | - | JSON mode |
+| 18.4 | Done | main | Architecture registry |
+| 19.1 | Done | phase_19_grammar_json | Grammar parser |
+| 19.2 | Done | phase_19_grammar_json | Grammar sampling |
+| 19.3 | Done | phase_19_grammar_json | JSON mode |
 | 20.1 | Pending | - | AVX-512 kernels |
 | 20.2 | Pending | - | NEON improvements |
 | 20.3 | Pending | - | GEMM optimizations |

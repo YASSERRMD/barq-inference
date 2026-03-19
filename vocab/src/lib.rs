@@ -45,5 +45,5 @@ pub use gguf_tokenizer::GgufTokenizer;
 pub use spm::SentencePiece;
 pub use tokenizer::{Tokenizer, TokenizerType};
 pub use unigram::Unigram;
-pub use vocab::{SpecialToken, Token, Vocab};
+pub use vocab::{SpecialToken, Token, TokenAttr, TokenType, Vocab, VocabType};
 pub use wpm::WordPiece;
