@@ -59,28 +59,28 @@ This plan addresses the gaps identified in `GAP_ANALYSIS.md` through focused, at
 - [x] Create `models/src/qwen3.rs` for Qwen3
 - [x] Implement RoPE with NTK-aware scaling
 - [x] Add GQA support for Qwen models
-- [ ] Add test GGUF files
+- [x] Add test GGUF files
 
 ### Phase 18.2: DeepSeek Architecture
-- [ ] Create `models/src/arch/deepseek.rs`
-- [ ] Implement Multi-head Latent Attention (MLA)
-- [ ] Add MoE routing for DeepSeek-MoE
-- [ ] Implement FFN with SwiGLU
-- [ ] Add test cases
+- [x] Create `models/src/deepseek.rs`
+- [x] Implement Multi-head Latent Attention (MLA)
+- [x] Add MoE routing for DeepSeek-MoE
+- [x] Implement FFN with SwiGLU
+- [x] Add test cases
 
 ### Phase 18.3: Mistral/Mixtral Improvements
-- [ ] Complete `models/src/mistral.rs` implementation
-- [ ] Complete `models/src/mixtral.rs` with full MoE routing
-- [ ] Add sliding window attention
-- [ ] Implement expert load balancing
-- [ ] Add benchmarking
+- [x] Complete `models/src/mistral.rs` implementation
+- [x] Complete `models/src/mixtral.rs` with full MoE routing
+- [x] Add sliding window attention
+- [x] Implement expert load balancing
+- [x] Add benchmarking
 
 ### Phase 18.4: Architecture Registry
 - [x] Create `models/src/arch_registry.rs`
 - [x] Map GGUF architecture names to implementations
 - [x] Add architecture detection from metadata
 - [x] Create unified `LlmArch` trait
-- [ ] Document all supported architectures
+- [x] Document all supported architectures
 
 ---
 
@@ -407,8 +407,8 @@ Each phase.X.Y gets its own branch, commits are atomic, and branches are pushed 
 | 17.3 | Done | main | IK quantization |
 | 17.4 | Done | main | KV cache quantization |
 | 18.1 | Done | main | Qwen architecture |
-| 18.2 | Pending | - | DeepSeek architecture |
-| 18.3 | Pending | - | Mistral improvements |
+| 18.2 | Done | main | DeepSeek architecture |
+| 18.3 | Done | main | Mistral improvements |
 | 18.4 | Done | main | Architecture registry |
 | 19.1 | Done | phase_19_grammar_json | Grammar parser |
 | 19.2 | Done | phase_19_grammar_json | Grammar sampling |
