@@ -162,9 +162,57 @@ impl MixtralModel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::write_test_gguf_file;
+    use barq_core::gguf::GgufValue;
+    use std::sync::Arc;
 
-    #[test]
-    fn test_mixtral_creation() {
-        // Placeholder - would need actual model data
+    async fn load_mixtral_model() -> Arc<Model> {
+        let path = write_test_gguf_file(
+            "mixtral",
+            &[
+                (
+                    "general.architecture",
+                    GgufValue::String("mixtral".to_string()),
+                ),
+                ("llama.block_count", GgufValue::Uint32(32)),
+                ("llama.attention.head_count", GgufValue::Uint32(32)),
+                ("llama.attention.head_count_kv", GgufValue::Uint32(8)),
+                ("llama.embedding_length", GgufValue::Uint32(4096)),
+                ("llama.feed_forward_length", GgufValue::Uint32(14_336)),
+                ("llama.context_length", GgufValue::Uint32(32_768)),
+                ("llama.rope.scaling.type", GgufValue::Uint32(1)),
+                ("llama.expert_count", GgufValue::Uint32(8)),
+                ("llama.expert_used_count", GgufValue::Uint32(2)),
+                ("mixtral.sliding_window", GgufValue::Uint32(4_096)),
+                ("mixtral.load_balancing", GgufValue::Bool(false)),
+                ("mixtral.load_balancing_coeff", GgufValue::Float32(0.02)),
+                (
+                    "mixtral.routing_type",
+                    GgufValue::String("topk".to_string()),
+                ),
+            ],
+        );
+        Arc::new(Model::load(&path).await.unwrap())
+    }
+
+    #[tokio::test]
+    async fn test_mixtral_creation() {
+        let model = load_mixtral_model().await;
+        let wrapper = MixtralModel::new(model).unwrap();
+
+        assert_eq!(wrapper.n_expert(), 8);
+        assert_eq!(wrapper.n_expert_per_token(), 2);
+        assert!(wrapper.has_gqa());
+        assert_eq!(wrapper.n_kv_heads(), 8);
+        assert!(wrapper.has_sliding_window());
+        assert_eq!(wrapper.sliding_window(), 4_096);
+        assert!(!wrapper.has_load_balancing());
+        assert!((wrapper.load_balancing_coeff() - 0.02).abs() < f32::EPSILON);
+        assert!(wrapper.is_8x7b());
+        assert!(!wrapper.is_8x22b());
+        assert!(wrapper.has_rope_scaling());
+        assert_eq!(wrapper.rope_scaling_type(), 1);
+        assert_eq!(wrapper.routing_type(), "topk");
+        assert!(wrapper.create_context(ContextParams::default()).is_ok());
     }
 }

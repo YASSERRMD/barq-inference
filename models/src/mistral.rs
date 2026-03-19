@@ -108,9 +108,45 @@ impl MistralModel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::write_test_gguf_file;
+    use barq_core::gguf::GgufValue;
+    use std::sync::Arc;
 
-    #[test]
-    fn test_mistral_creation() {
-        // Placeholder - would need actual model data
+    async fn load_mistral_model() -> Arc<Model> {
+        let path = write_test_gguf_file(
+            "mistral",
+            &[
+                (
+                    "general.architecture",
+                    GgufValue::String("mistral".to_string()),
+                ),
+                ("llama.block_count", GgufValue::Uint32(32)),
+                ("llama.attention.head_count", GgufValue::Uint32(32)),
+                ("llama.attention.head_count_kv", GgufValue::Uint32(8)),
+                ("llama.embedding_length", GgufValue::Uint32(4096)),
+                ("llama.feed_forward_length", GgufValue::Uint32(14_336)),
+                ("llama.context_length", GgufValue::Uint32(32_768)),
+                ("llama.rope.scaling.type", GgufValue::Uint32(1)),
+                ("mistral.sliding_window", GgufValue::Uint32(4_096)),
+                ("mistral.version", GgufValue::String("0.2".to_string())),
+            ],
+        );
+        Arc::new(Model::load(&path).await.unwrap())
+    }
+
+    #[tokio::test]
+    async fn test_mistral_creation() {
+        let model = load_mistral_model().await;
+        let wrapper = MistralModel::new(model).unwrap();
+
+        assert!(wrapper.has_gqa());
+        assert_eq!(wrapper.n_kv_heads(), 8);
+        assert!(wrapper.has_sliding_window());
+        assert_eq!(wrapper.sliding_window(), 4_096);
+        assert!(wrapper.has_rope_scaling());
+        assert_eq!(wrapper.rope_scaling_type(), 1);
+        assert!(!wrapper.is_v01());
+        assert!(wrapper.is_v02_or_v03());
+        assert!(wrapper.create_context(ContextParams::default()).is_ok());
     }
 }
