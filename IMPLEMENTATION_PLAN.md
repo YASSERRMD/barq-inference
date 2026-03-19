@@ -269,25 +269,25 @@ This plan addresses the gaps identified in `GAP_ANALYSIS.md` through focused, at
 **Goal:** Ensure correctness and prevent regressions.
 
 ### Phase 25.1: Unit Test Expansion
-- [ ] Add tests for each quantization type
-- [ ] Add tests for each architecture
-- [ ] Add tests for sampling algorithms
-- [ ] Add tests for attention mechanisms
-- [ ] Achieve >80% coverage
+- [x] Add tests for each quantization type
+- [x] Add tests for each architecture
+- [x] Add tests for sampling algorithms
+- [x] Add tests for attention mechanisms
+- [x] Achieve >80% coverage
 
 ### Phase 25.2: Integration Tests
-- [ ] Create `tests/integration/`
-- [ ] Add model loading tests
-- [ ] Add end-to-end inference tests
-- [ ] Add memory leak tests
-- [ ] Add CI workflow
+- [x] Create `cli/tests/integration/`
+- [x] Add model loading tests
+- [x] Add end-to-end inference tests
+- [x] Add memory leak tests
+- [x] Add CI workflow
 
 ### Phase 25.3: Benchmark Suite
-- [ ] Create `benches/` with criterion benchmarks
-- [ ] Add token generation benchmarks
-- [ ] Add prompt processing benchmarks
-- [ ] Add memory benchmarks
-- [ ] Track performance over time
+- [x] Create `cli/benches/` with criterion benchmarks
+- [x] Add token generation benchmarks
+- [x] Add prompt processing benchmarks
+- [x] Add memory benchmarks
+- [x] Track performance over time
 
 ---
 
@@ -434,9 +434,9 @@ Each phase.X.Y gets its own branch, commits are atomic, and branches are pushed 
 | 24.1 | Done | phase_24_chat_templates_server | Jinja templates |
 | 24.2 | Done | phase_24_chat_templates_server | HTTP server |
 | 24.3 | Done | phase_24_chat_templates_server | OpenAI API |
-| 25.1 | Pending | - | Unit tests |
-| 25.2 | Pending | - | Integration tests |
-| 25.3 | Pending | - | Benchmarks |
+| 25.1 | Done | phase_25_testing_infra | Unit tests |
+| 25.2 | Done | phase_25_testing_infra | Integration tests |
+| 25.3 | Done | phase_25_testing_infra | Benchmarks |
 | 26.1 | Pending | - | Vision encoder |
 | 26.2 | Pending | - | VL models |
 | 27.1 | Pending | - | API docs |
