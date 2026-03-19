@@ -47,6 +47,9 @@ pub mod qwen3;
 pub mod transformer;
 pub mod weight_cache;
 
+#[cfg(test)]
+pub(crate) mod test_support;
+
 pub use arch::{LlmArch, LlmType};
 pub use arch_registry::{ArchitectureRegistry, LlmArchTrait};
 pub use context::ModelContext;
