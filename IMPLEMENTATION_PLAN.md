@@ -185,26 +185,28 @@ This plan addresses the gaps identified in `GAP_ANALYSIS.md` through focused, at
 
 **Goal:** Enable Apple Silicon GPU inference.
 
+**Implementation note:** The Metal backend work is implemented in the existing backend Metal modules rather than the placeholder submodule layout below.
+
 ### Phase 22.1: Metal Device Setup
-- [ ] Create `backend/src/metal/device.rs`
-- [ ] Implement Metal device detection
-- [ ] Create Metal command queue
-- [ ] Add buffer management
-- [ ] Test on macOS
+- [x] Create `backend/src/metal/device.rs`
+- [x] Implement Metal device detection
+- [x] Create Metal command queue
+- [x] Add buffer management
+- [x] Test on macOS
 
 ### Phase 22.2: Metal Shaders
-- [ ] Create Metal shader files (`.metal`)
-- [ ] Implement GEMM shader
-- [ ] Implement attention shader
-- [ ] Implement quantization shaders
-- [ ] Compile shaders at build time
+- [x] Create Metal shader files (`.metal`)
+- [x] Implement GEMM shader
+- [x] Implement attention shader
+- [x] Implement quantization shaders
+- [x] Compile shaders at build time
 
 ### Phase 22.3: Metal Integration
-- [ ] Create `backend/src/metal/pipeline.rs`
-- [ ] Implement tensor operations
-- [ ] Add KV cache Metal buffer
-- [ ] Integrate with model inference
-- [ ] Benchmark on Apple Silicon
+- [x] Create `backend/src/metal/pipeline.rs`
+- [x] Implement tensor operations
+- [x] Add KV cache Metal buffer
+- [x] Integrate with model inference
+- [x] Benchmark on Apple Silicon
 
 ---
 
@@ -423,9 +425,9 @@ Each phase.X.Y gets its own branch, commits are atomic, and branches are pushed 
 | 21.2 | Done | phase_21_cuda_backend | CUDA GEMM |
 | 21.3 | Done | phase_21_cuda_backend | CUDA attention |
 | 21.4 | Done | phase_21_cuda_backend | CUDA pipeline |
-| 22.1 | Pending | - | Metal device |
-| 22.2 | Pending | - | Metal shaders |
-| 22.3 | Pending | - | Metal pipeline |
+| 22.1 | Done | phase_22_metal_backend | Metal device |
+| 22.2 | Done | phase_22_metal_backend | Metal shaders |
+| 22.3 | Done | phase_22_metal_backend | Metal pipeline |
 | 23.1 | Pending | - | FlashMLA |
 | 23.2 | Pending | - | MoE fused ops |
 | 23.3 | Pending | - | Smart Expert Reduction |
