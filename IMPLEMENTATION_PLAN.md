@@ -116,32 +116,32 @@ This plan addresses the gaps identified in `GAP_ANALYSIS.md` through focused, at
 **Goal:** Maximize CPU inference performance.
 
 ### Phase 20.1: AVX-512 Kernels
-- [ ] Add AVX-512 detection in `barq_core/src/platform.rs`
-- [ ] Implement AVX-512 matrix multiplication
-- [ ] Implement AVX-512 quantization kernels
-- [ ] Add runtime dispatch based on CPU features
-- [ ] Benchmark vs AVX2 baseline
+- [x] Add AVX-512 detection in `barq_core/src/platform.rs`
+- [x] Implement AVX-512 matrix multiplication
+- [x] Implement AVX-512 quantization kernels
+- [x] Add runtime dispatch based on CPU features
+- [x] Benchmark vs AVX2 baseline
 
 ### Phase 20.2: ARM NEON Improvements
-- [ ] Audit existing NEON code
-- [ ] Add missing NEON intrinsics
-- [ ] Implement NEON GEMM kernels
-- [ ] Test on Apple Silicon
-- [ ] Document performance
+- [x] Audit existing NEON code
+- [x] Add missing NEON intrinsics
+- [x] Implement NEON GEMM kernels
+- [x] Test on Apple Silicon
+- [x] Document performance
 
 ### Phase 20.3: GEMM Optimizations
-- [ ] Implement blocked GEMM in `barq_core/src/gemm.rs`
-- [ ] Add cache-aware tiling
-- [ ] Implement packing for cache efficiency
-- [ ] Add threading with rayon
-- [ ] Benchmark different sizes
+- [x] Implement blocked GEMM in `barq_core/src/gemm.rs`
+- [x] Add cache-aware tiling
+- [x] Implement packing for cache efficiency
+- [x] Add threading with rayon
+- [x] Benchmark different sizes
 
 ### Phase 20.4: Prompt Processing Optimization
-- [ ] Optimize prompt encoding path
-- [ ] Implement parallel prompt processing
-- [ ] Add batched prompt caching
-- [ ] Measure TTFT improvements
-- [ ] Document results
+- [x] Optimize prompt encoding path
+- [x] Implement parallel prompt processing
+- [x] Add batched prompt caching
+- [x] Measure TTFT improvements
+- [x] Document results
 
 ---
 
@@ -413,10 +413,10 @@ Each phase.X.Y gets its own branch, commits are atomic, and branches are pushed 
 | 19.1 | Done | phase_19_grammar_json | Grammar parser |
 | 19.2 | Done | phase_19_grammar_json | Grammar sampling |
 | 19.3 | Done | phase_19_grammar_json | JSON mode |
-| 20.1 | Pending | - | AVX-512 kernels |
-| 20.2 | Pending | - | NEON improvements |
-| 20.3 | Pending | - | GEMM optimizations |
-| 20.4 | Pending | - | Prompt optimization |
+| 20.1 | Done | phase_20_cpu_optimizations | AVX-512 kernels |
+| 20.2 | Done | phase_20_cpu_optimizations | NEON improvements |
+| 20.3 | Done | phase_20_cpu_optimizations | GEMM optimizations |
+| 20.4 | Done | phase_20_cpu_optimizations | Prompt optimization |
 | 21.1 | Pending | - | CUDA context |
 | 21.2 | Pending | - | CUDA GEMM |
 | 21.3 | Pending | - | CUDA attention |
