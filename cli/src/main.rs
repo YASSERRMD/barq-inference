@@ -30,6 +30,7 @@
 
 mod benchmark;
 mod performance;
+mod server;
 
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
@@ -206,6 +207,29 @@ enum Commands {
         port: u16,
     },
 
+    /// OpenAI-compatible HTTP API server
+    HttpServer {
+        /// Model path (GGUF file)
+        #[arg(short, long)]
+        model: PathBuf,
+
+        /// Host address
+        #[arg(short, long, default_value = "0.0.0.0")]
+        host: String,
+
+        /// Port
+        #[arg(short, long, default_value = "8000")]
+        port: u16,
+
+        /// Maximum request context size
+        #[arg(long, default_value = "2048")]
+        context_size: usize,
+
+        /// Requests per minute allowed per client
+        #[arg(long, default_value = "60")]
+        rate_limit_rpm: u32,
+    },
+
     /// Show Apple Metal / Apple Silicon capabilities (Phase 7.1)
     MetalInfo {
         /// Also show recommended ContextParams
@@ -356,6 +380,14 @@ async fn main() -> anyhow::Result<()> {
         } => cmd_convert(input, output, quantize, output_type).await,
 
         Commands::Server { model, host, port } => cmd_server(model, host, port).await,
+
+        Commands::HttpServer {
+            model,
+            host,
+            port,
+            context_size,
+            rate_limit_rpm,
+        } => cmd_http_server(model, host, port, context_size, rate_limit_rpm).await,
 
         Commands::MetalInfo { params } => cmd_metal_info(params).await,
 
@@ -908,6 +940,23 @@ async fn cmd_server(model: PathBuf, host: String, port: u16) -> anyhow::Result<(
     server.start().await?;
 
     Ok(())
+}
+
+async fn cmd_http_server(
+    model: PathBuf,
+    host: String,
+    port: u16,
+    context_size: usize,
+    rate_limit_rpm: u32,
+) -> anyhow::Result<()> {
+    server::run_http_server(server::HttpServerConfig {
+        model_path: model,
+        host,
+        port,
+        context_size,
+        rate_limit_rpm,
+    })
+    .await
 }
 
 // ── Phase 6.2: Continuous BatchEngine handler ─────────────────────────────────

@@ -163,6 +163,21 @@ barq-inference benchmark -m model.gguf --iterations 10
 barq-inference info -m model.gguf
 ```
 
+**OpenAI-Compatible HTTP Server**
+```bash
+barq-inference http-server -m model.gguf --host 0.0.0.0 --port 8000 --rate-limit-rpm 60
+```
+
+The server exposes:
+- `GET /v1/models`
+- `POST /v1/completions`
+- `POST /v1/chat/completions`
+- `POST /v1/responses`
+
+Streaming responses use Server-Sent Events, and CORS is enabled by default for browser clients.
+
+`/v1/responses` accepts either a plain `input` prompt or a `messages` array, and the server reports token usage for the rendered prompt and generated completion. Per-client rate limiting is enforced with a token bucket keyed by IP address.
+
 ### Rust API
 
 ```rust

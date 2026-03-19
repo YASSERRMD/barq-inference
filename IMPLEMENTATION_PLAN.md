@@ -242,25 +242,25 @@ This plan addresses the gaps identified in `GAP_ANALYSIS.md` through focused, at
 **Goal:** Production-ready serving capabilities.
 
 ### Phase 24.1: Jinja Chat Templates
-- [ ] Create `vocab/src/chat_template.rs`
-- [ ] Implement Jinja2 template parser
-- [ ] Add common templates (LLaMA, Mistral, Qwen, etc.)
-- [ ] Implement template application
-- [ ] Test with various models
+- [x] Create `vocab/src/chat_template.rs`
+- [x] Implement Jinja2 template parser
+- [x] Add common templates (LLaMA, Mistral, Qwen, etc.)
+- [x] Implement template application
+- [x] Test with various models
 
 ### Phase 24.2: HTTP Server
-- [ ] Create `cli/src/server.rs`
-- [ ] Implement `/v1/chat/completions` endpoint
-- [ ] Implement `/v1/completions` endpoint
-- [ ] Add streaming support (SSE)
-- [ ] Add CORS support
+- [x] Create `cli/src/server.rs`
+- [x] Implement `/v1/chat/completions` endpoint
+- [x] Implement `/v1/completions` endpoint
+- [x] Add streaming support (SSE)
+- [x] Add CORS support
 
 ### Phase 24.3: OpenAI API Compatibility
-- [ ] Implement `/v1/models` endpoint
-- [ ] Implement `/v1/responses` (ik_llama.cpp style)
-- [ ] Add token counting
-- [ ] Add rate limiting
-- [ ] Document API compatibility
+- [x] Implement `/v1/models` endpoint
+- [x] Implement `/v1/responses` (ik_llama.cpp style)
+- [x] Add token counting
+- [x] Add rate limiting
+- [x] Document API compatibility
 
 ---
 
@@ -269,25 +269,25 @@ This plan addresses the gaps identified in `GAP_ANALYSIS.md` through focused, at
 **Goal:** Ensure correctness and prevent regressions.
 
 ### Phase 25.1: Unit Test Expansion
-- [ ] Add tests for each quantization type
-- [ ] Add tests for each architecture
-- [ ] Add tests for sampling algorithms
-- [ ] Add tests for attention mechanisms
-- [ ] Achieve >80% coverage
+- [x] Add tests for each quantization type
+- [x] Add tests for each architecture
+- [x] Add tests for sampling algorithms
+- [x] Add tests for attention mechanisms
+- [x] Achieve >80% coverage
 
 ### Phase 25.2: Integration Tests
-- [ ] Create `tests/integration/`
-- [ ] Add model loading tests
-- [ ] Add end-to-end inference tests
-- [ ] Add memory leak tests
-- [ ] Add CI workflow
+- [x] Create `cli/tests/integration/`
+- [x] Add model loading tests
+- [x] Add end-to-end inference tests
+- [x] Add memory leak tests
+- [x] Add CI workflow
 
 ### Phase 25.3: Benchmark Suite
-- [ ] Create `benches/` with criterion benchmarks
-- [ ] Add token generation benchmarks
-- [ ] Add prompt processing benchmarks
-- [ ] Add memory benchmarks
-- [ ] Track performance over time
+- [x] Create `cli/benches/` with criterion benchmarks
+- [x] Add token generation benchmarks
+- [x] Add prompt processing benchmarks
+- [x] Add memory benchmarks
+- [x] Track performance over time
 
 ---
 
@@ -296,18 +296,18 @@ This plan addresses the gaps identified in `GAP_ANALYSIS.md` through focused, at
 **Goal:** Enable vision-language model support.
 
 ### Phase 26.1: Vision Encoder Interface
-- [ ] Create `models/src/vision/mod.rs`
-- [ ] Define vision encoder trait
-- [ ] Add CLIP-like encoder support
-- [ ] Add image preprocessing
-- [ ] Test embedding extraction
+- [x] Create `models/src/vision/mod.rs`
+- [x] Define vision encoder trait
+- [x] Add CLIP-like encoder support
+- [x] Add image preprocessing
+- [x] Test embedding extraction
 
 ### Phase 26.2: Vision-Language Models
-- [ ] Create `models/src/arch/qwen2vl.rs`
-- [ ] Create `models/src/arch/llava.rs`
-- [ ] Implement cross-attention
-- [ ] Add image token handling
-- [ ] Test with multimodal GGUF
+- [x] Create `models/src/qwen2vl.rs`
+- [x] Create `models/src/llava.rs`
+- [x] Implement cross-attention
+- [x] Add image token handling
+- [x] Test with multimodal GGUF
 
 ---
 
@@ -431,14 +431,14 @@ Each phase.X.Y gets its own branch, commits are atomic, and branches are pushed 
 | 23.1 | Done | phase_23_flashmla_moe | FlashMLA |
 | 23.2 | Done | phase_23_flashmla_moe | MoE fused ops |
 | 23.3 | Done | phase_23_flashmla_moe | Smart Expert Reduction |
-| 24.1 | Pending | - | Jinja templates |
-| 24.2 | Pending | - | HTTP server |
-| 24.3 | Pending | - | OpenAI API |
-| 25.1 | Pending | - | Unit tests |
-| 25.2 | Pending | - | Integration tests |
-| 25.3 | Pending | - | Benchmarks |
-| 26.1 | Pending | - | Vision encoder |
-| 26.2 | Pending | - | VL models |
+| 24.1 | Done | phase_24_chat_templates_server | Jinja templates |
+| 24.2 | Done | phase_24_chat_templates_server | HTTP server |
+| 24.3 | Done | phase_24_chat_templates_server | OpenAI API |
+| 25.1 | Done | phase_25_testing_infra | Unit tests |
+| 25.2 | Done | phase_25_testing_infra | Integration tests |
+| 25.3 | Done | phase_25_testing_infra | Benchmarks |
+| 26.1 | Done | phase_26_multimodal_foundation | Vision encoder |
+| 26.2 | Done | phase_26_multimodal_foundation | VL models |
 | 27.1 | Pending | - | API docs |
 | 27.2 | Pending | - | User docs |
 | 27.3 | Pending | - | Dev docs |
