@@ -119,6 +119,13 @@ cargo build --release --features metal
 barq-inference run -m model.gguf -p "Explain quantum computing"
 ```
 
+**JSON Mode**
+```bash
+barq-inference run -m model.gguf -p "Generate a user profile" --json
+```
+
+This constrains the output to JSON object mode and validates the result before printing.
+
 **Interactive Chat**
 ```bash
 barq-inference chat -m model.gguf
