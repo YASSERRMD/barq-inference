@@ -164,6 +164,7 @@ mod tests {
     use super::*;
     use crate::test_support::write_test_gguf_file;
     use barq_core::gguf::GgufValue;
+    use barq_core::testing::BenchmarkTimer;
     use std::sync::Arc;
 
     async fn load_mixtral_model() -> Arc<Model> {
@@ -214,5 +215,24 @@ mod tests {
         assert_eq!(wrapper.rope_scaling_type(), 1);
         assert_eq!(wrapper.routing_type(), "topk");
         assert!(wrapper.create_context(ContextParams::default()).is_ok());
+    }
+
+    #[test]
+    fn benchmark_mixtral_context_creation() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        let (context, elapsed) = BenchmarkTimer::measure(|| {
+            runtime.block_on(async {
+                let model = load_mixtral_model().await;
+                let wrapper = MixtralModel::new(model).unwrap();
+                wrapper.create_context(ContextParams::default()).unwrap()
+            })
+        });
+
+        println!("Mixtral context creation: {:.3}ms", elapsed * 1000.0);
+        assert_eq!(context.model().arch(), LlmArch::Mixtral);
     }
 }
