@@ -34,6 +34,7 @@ pub mod batch_engine;
 pub mod benchmarks;
 pub mod continuous_batching;
 pub mod flash_attention;
+pub mod flash_mla;
 pub mod logging;
 pub mod metal_backend_integration;
 pub mod metal_detect;
@@ -52,6 +53,7 @@ pub use batch_engine::{BatchEngine, BatchEngineHandle, BatchRequest};
 pub use benchmarks::{run_benchmark, BenchmarkResult};
 pub use continuous_batching::{Batch, BatchScheduler, ContinuousBatchingConfig};
 pub use flash_attention::FlashAttention;
+pub use flash_mla::{configure_context_for_mla, FlashMlaMode, FlashMlaRuntime};
 pub use logging::{init_logger, logger, LogLevel, Logger, LoggingConfig, RequestLogger};
 pub use metrics::{
     check_context_health, ContextHealth, ContextManager, HealthCheck, InferenceMetrics,
