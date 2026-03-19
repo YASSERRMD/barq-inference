@@ -117,9 +117,72 @@ impl Qwen2MoEModel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::write_test_gguf_file;
+    use barq_core::gguf::GgufValue;
+    use std::sync::Arc;
 
-    #[test]
-    fn test_qwen2_creation() {
-        // Placeholder - would need actual model data
+    async fn load_qwen2_model() -> Arc<Model> {
+        let path = write_test_gguf_file(
+            "qwen2",
+            &[
+                (
+                    "general.architecture",
+                    GgufValue::String("qwen2".to_string()),
+                ),
+                ("general.vocab_size", GgufValue::Uint32(151_936)),
+                ("qwen.block_count", GgufValue::Uint32(28)),
+                ("qwen.attention.head_count", GgufValue::Uint32(40)),
+                ("qwen.attention.head_count_kv", GgufValue::Uint32(8)),
+                ("qwen.embedding_length", GgufValue::Uint32(5120)),
+                ("qwen.intermediate_size", GgufValue::Uint32(13_824)),
+                ("qwen.context_length", GgufValue::Uint32(32_768)),
+                ("qwen.rope.freq_base", GgufValue::Float32(1_000_000.0)),
+                ("qwen.rope.scaling.type", GgufValue::Uint32(1)),
+            ],
+        );
+        Arc::new(Model::load(&path).await.unwrap())
+    }
+
+    async fn load_qwen2_moe_model() -> Arc<Model> {
+        let path = write_test_gguf_file(
+            "qwen2_moe",
+            &[
+                (
+                    "general.architecture",
+                    GgufValue::String("qwen2.moe".to_string()),
+                ),
+                ("qwen2.n_experts", GgufValue::Uint32(4)),
+                ("qwen.block_count", GgufValue::Uint32(28)),
+                ("qwen.attention.head_count", GgufValue::Uint32(40)),
+                ("qwen.attention.head_count_kv", GgufValue::Uint32(8)),
+                ("qwen.embedding_length", GgufValue::Uint32(5120)),
+                ("qwen.intermediate_size", GgufValue::Uint32(13_824)),
+                ("qwen.context_length", GgufValue::Uint32(32_768)),
+                ("qwen.rope.freq_base", GgufValue::Float32(1_000_000.0)),
+                ("qwen.rope.scaling.type", GgufValue::Uint32(1)),
+            ],
+        );
+        Arc::new(Model::load(&path).await.unwrap())
+    }
+
+    #[tokio::test]
+    async fn test_qwen2_creation() {
+        let model = load_qwen2_model().await;
+        let wrapper = Qwen2Model::new(model).unwrap();
+
+        assert!(wrapper.has_gqa());
+        assert_eq!(wrapper.n_kv_heads(), 8);
+        assert!(wrapper.has_ntk_scaling());
+        assert!(wrapper.create_context(ContextParams::default()).is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_qwen2_moe_creation() {
+        let model = load_qwen2_moe_model().await;
+        let wrapper = Qwen2MoEModel::new(model).unwrap();
+
+        assert!(wrapper.has_gqa());
+        assert_eq!(wrapper.n_experts(), Some(4));
+        assert!(wrapper.create_context(ContextParams::default()).is_ok());
     }
 }
