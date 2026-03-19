@@ -46,6 +46,7 @@ pub mod qwen;
 pub mod qwen2;
 pub mod qwen3;
 pub mod transformer;
+pub mod vision;
 pub mod weight_cache;
 
 #[cfg(test)]
@@ -62,4 +63,5 @@ pub use qwen::QwenModel;
 pub use qwen2::{Qwen2MoEModel, Qwen2Model};
 pub use qwen3::Qwen3Model;
 pub use transformer::LlamaTransformer;
+pub use vision::{ClipVisionEncoder, ImageInput, ImagePreprocessor, VisionEncoder};
 pub use weight_cache::WeightCache;
