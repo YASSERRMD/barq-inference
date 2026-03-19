@@ -198,14 +198,91 @@ impl DeepSeekMoEModel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::write_test_gguf_file;
+    use barq_core::gguf::GgufValue;
+    use std::sync::Arc;
 
-    #[test]
-    fn test_deepseek_creation() {
-        // Placeholder - would need actual model data
+    async fn load_deepseek_model() -> Arc<Model> {
+        let path = write_test_gguf_file(
+            "deepseek",
+            &[
+                (
+                    "general.architecture",
+                    GgufValue::String("deepseek".to_string()),
+                ),
+                ("deepseek.block_count", GgufValue::Uint32(28)),
+                ("deepseek.attention.head_count", GgufValue::Uint32(32)),
+                ("deepseek.attention.head_count_kv", GgufValue::Uint32(8)),
+                ("deepseek.embedding_length", GgufValue::Uint32(4096)),
+                ("deepseek.intermediate_size", GgufValue::Uint32(11_008)),
+                ("deepseek.context_length", GgufValue::Uint32(131_072)),
+                ("deepseek.rope.freq_base", GgufValue::Float32(10_000.0)),
+                ("deepseek.rope.freq_scale", GgufValue::Float32(1.0)),
+                ("deepseek.rope.scaling.type", GgufValue::Uint32(2)),
+                ("deepseek.mla_compression", GgufValue::Float32(0.25)),
+                ("deepseek.n_latent_heads", GgufValue::Uint32(8)),
+                ("deepseek.swiglu_multiplier", GgufValue::Float32(2.6667)),
+            ],
+        );
+        Arc::new(Model::load(&path).await.unwrap())
     }
 
-    #[test]
-    fn test_deepseek_moe_creation() {
-        // Placeholder - would need actual model data
+    async fn load_deepseek_moe_model() -> Arc<Model> {
+        let path = write_test_gguf_file(
+            "deepseek_moe",
+            &[
+                (
+                    "general.architecture",
+                    GgufValue::String("deepseek.moe".to_string()),
+                ),
+                ("deepseek.block_count", GgufValue::Uint32(30)),
+                ("deepseek.attention.head_count", GgufValue::Uint32(48)),
+                ("deepseek.attention.head_count_kv", GgufValue::Uint32(8)),
+                ("deepseek.embedding_length", GgufValue::Uint32(6144)),
+                ("deepseek.intermediate_size", GgufValue::Uint32(16_384)),
+                ("deepseek.context_length", GgufValue::Uint32(131_072)),
+                ("deepseek.rope.scaling.type", GgufValue::Uint32(2)),
+                ("deepseek.mla_compression", GgufValue::Float32(0.125)),
+                ("deepseek.n_latent_heads", GgufValue::Uint32(16)),
+                ("deepseek.swiglu_multiplier", GgufValue::Float32(2.75)),
+                ("deepseek.n_experts", GgufValue::Uint32(64)),
+                ("deepseek.n_active_experts", GgufValue::Uint32(6)),
+                (
+                    "deepseek.routing_type",
+                    GgufValue::String("affine".to_string()),
+                ),
+                ("deepseek.load_balancing", GgufValue::Bool(false)),
+            ],
+        );
+        Arc::new(Model::load(&path).await.unwrap())
+    }
+
+    #[tokio::test]
+    async fn test_deepseek_creation() {
+        let model = load_deepseek_model().await;
+        let wrapper = DeepSeekModel::new(model).unwrap();
+
+        assert!(wrapper.has_mla());
+        assert!(wrapper.has_yarn_scaling());
+        assert!((wrapper.mla_compression_ratio() - 0.25).abs() < f32::EPSILON);
+        assert_eq!(wrapper.n_latent_heads(), 8);
+        assert!((wrapper.swiglu_multiplier() - 2.6667).abs() < 1e-6);
+        assert!(wrapper.create_context(ContextParams::default()).is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_deepseek_moe_creation() {
+        let model = load_deepseek_moe_model().await;
+        let wrapper = DeepSeekMoEModel::new(model).unwrap();
+
+        assert!(wrapper.has_mla());
+        assert_eq!(wrapper.n_experts(), 64);
+        assert_eq!(wrapper.n_active_experts(), 6);
+        assert_eq!(wrapper.routing_type(), "affine");
+        assert!(!wrapper.has_load_balancing());
+        assert!((wrapper.mla_compression_ratio() - 0.125).abs() < f32::EPSILON);
+        assert_eq!(wrapper.n_latent_heads(), 16);
+        assert!((wrapper.swiglu_multiplier() - 2.75).abs() < 1e-6);
+        assert!(wrapper.create_context(ContextParams::default()).is_ok());
     }
 }
