@@ -25,7 +25,7 @@ pub enum SimdLevel {
 impl SimdLevel {
     /// Detect the best available SIMD support at runtime
     pub fn detect() -> Self {
-        #[cfg(all(target_arch = "x86_64", feature = "std"))]
+        #[cfg(target_arch = "x86_64")]
         {
             use std::arch::x86_64::*;
 
@@ -42,7 +42,7 @@ impl SimdLevel {
             }
         }
 
-        #[cfg(all(target_arch = "aarch64", feature = "std"))]
+        #[cfg(target_arch = "aarch64")]
         {
             return SimdLevel::NEON;
         }
@@ -78,6 +78,9 @@ pub fn simd_dot_product_f32(a: &[f32], b: &[f32]) -> Result<f32> {
 
         unsafe {
             match simd_level {
+                SimdLevel::AVX512 if is_x86_feature_detected!("avx512f") => {
+                    return Ok(dot_product_avx512(a, b));
+                }
                 SimdLevel::AVX2 if is_x86_feature_detected!("avx2") => {
                     return Ok(dot_product_avx2(a, b));
                 }
@@ -105,6 +108,33 @@ pub fn simd_dot_product_f32(a: &[f32], b: &[f32]) -> Result<f32> {
 /// Scalar fallback for dot product
 fn dot_product_scalar(a: &[f32], b: &[f32]) -> f32 {
     a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx512f")]
+unsafe fn dot_product_avx512(a: &[f32], b: &[f32]) -> f32 {
+    use std::arch::x86_64::*;
+
+    let mut sum = _mm512_setzero_ps();
+    let mut i = 0;
+
+    while i + 16 <= a.len() {
+        let a_vec = _mm512_loadu_ps(a.as_ptr().add(i));
+        let b_vec = _mm512_loadu_ps(b.as_ptr().add(i));
+        sum = _mm512_fmadd_ps(a_vec, b_vec, sum);
+        i += 16;
+    }
+
+    let mut result = [0.0f32; 16];
+    _mm512_storeu_ps(result.as_mut_ptr(), sum);
+    let mut total: f32 = result.iter().sum();
+
+    while i < a.len() {
+        total += a[i] * b[i];
+        i += 1;
+    }
+
+    total
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -212,7 +242,9 @@ pub fn simd_add_f32(a: &[f32], b: &[f32], result: &mut [f32]) -> Result<()> {
         use std::arch::x86_64::*;
 
         unsafe {
-            if simd_level == SimdLevel::AVX2 && is_x86_feature_detected!("avx2") {
+            if simd_level == SimdLevel::AVX512 && is_x86_feature_detected!("avx512f") {
+                return add_avx512(a, b, result);
+            } else if simd_level == SimdLevel::AVX2 && is_x86_feature_detected!("avx2") {
                 return add_avx2(a, b, result);
             } else if simd_level >= SimdLevel::SSE42 && is_x86_feature_detected!("sse4.2") {
                 return add_sse42(a, b, result);
@@ -235,6 +267,28 @@ pub fn simd_add_f32(a: &[f32], b: &[f32], result: &mut [f32]) -> Result<()> {
     for i in 0..a.len() {
         result[i] = a[i] + b[i];
     }
+    Ok(())
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx512f")]
+unsafe fn add_avx512(a: &[f32], b: &[f32], result: &mut [f32]) -> Result<()> {
+    use std::arch::x86_64::*;
+
+    let mut i = 0;
+    while i + 16 <= a.len() {
+        let a_vec = _mm512_loadu_ps(a.as_ptr().add(i));
+        let b_vec = _mm512_loadu_ps(b.as_ptr().add(i));
+        let sum = _mm512_add_ps(a_vec, b_vec);
+        _mm512_storeu_ps(result.as_mut_ptr().add(i), sum);
+        i += 16;
+    }
+
+    while i < a.len() {
+        result[i] = a[i] + b[i];
+        i += 1;
+    }
+
     Ok(())
 }
 
@@ -342,5 +396,11 @@ mod tests {
         let level = SimdLevel::detect();
         let width = level.vector_width();
         assert!((1..=16).contains(&width));
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    #[test]
+    fn test_detect_neon_on_arm64() {
+        assert_eq!(SimdLevel::detect(), SimdLevel::NEON);
     }
 }

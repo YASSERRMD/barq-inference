@@ -374,14 +374,20 @@ mod tests {
     #[test]
     fn test_simd_detection() {
         let simd = detect_simd();
-        // Should have detected something
-        assert!(
-            simd.avx2
-                || simd.avx512
-                || simd.neon
-                || simd.sve
-                || matches!(simd.platform, PlatformType::Unknown)
-        );
+        #[cfg(target_arch = "aarch64")]
+        {
+            assert!(simd.neon);
+        }
+
+        #[cfg(target_arch = "x86_64")]
+        {
+            assert!(simd.avx2 || simd.avx512 || simd.sve || simd.neon);
+        }
+
+        #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
+        {
+            assert!(matches!(simd.platform, PlatformType::Unknown));
+        }
     }
 
     #[test]
