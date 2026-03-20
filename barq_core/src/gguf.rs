@@ -462,6 +462,7 @@ impl GgufReader {
                     .collect();
                 crate::tensor::TensorData::F32(values)
             }
+            GgufTensorType::Q5_0 => self.load_q5_0(&dimensions, total_elements)?,
             GgufTensorType::Q4_0 => self.load_q4_0(&dimensions, total_elements)?,
             GgufTensorType::Q4_1 => {
                 return Err(Error::Unsupported("Q4_1 not yet implemented".to_string()))
@@ -576,6 +577,60 @@ impl GgufReader {
         Ok(crate::tensor::TensorData::F32(output))
     }
 
+    /// Load Q5_0 quantized tensor and dequantize to f32.
+    fn load_q5_0(
+        &mut self,
+        _dimensions: &[u64],
+        total_elements: usize,
+    ) -> Result<crate::tensor::TensorData> {
+        const QK_5_0: usize = 32;
+        const BYTES_PER_BLOCK: usize = 2 + 4 + (QK_5_0 / 2);
+
+        let n_blocks = total_elements.div_ceil(QK_5_0);
+        let total_bytes = n_blocks * BYTES_PER_BLOCK;
+
+        let mut data = vec![0u8; total_bytes];
+        self.reader.read_exact(&mut data).map_err(Error::Io)?;
+
+        let mut output = vec![0.0f32; n_blocks * QK_5_0];
+        let mut offset = 0usize;
+
+        for block_idx in 0..n_blocks {
+            if offset + BYTES_PER_BLOCK > data.len() {
+                break;
+            }
+
+            let d = half::f16::from_le_bytes([data[offset], data[offset + 1]]).to_f32();
+            offset += 2;
+
+            let qh = u32::from_le_bytes([
+                data[offset],
+                data[offset + 1],
+                data[offset + 2],
+                data[offset + 3],
+            ]);
+            offset += 4;
+
+            let qs = &data[offset..offset + (QK_5_0 / 2)];
+            offset += QK_5_0 / 2;
+
+            let base = block_idx * QK_5_0;
+            for j in 0..(QK_5_0 / 2) {
+                let xh_0 = (((qh >> (j + 0)) << 4) & 0x10) as u8;
+                let xh_1 = (((qh >> (j + 12)) ) & 0x10) as u8;
+
+                let x0 = ((qs[j] & 0x0F) | xh_0) as i32 - 16;
+                let x1 = ((qs[j] >> 4) | xh_1) as i32 - 16;
+
+                output[base + j] = x0 as f32 * d;
+                output[base + (QK_5_0 / 2) + j] = x1 as f32 * d;
+            }
+        }
+
+        output.truncate(total_elements);
+        Ok(crate::tensor::TensorData::F32(output))
+    }
+
     /// Load Q8_0 quantized tensor and dequantize to f32
     fn load_q8_0(
         &mut self,
@@ -585,8 +640,10 @@ impl GgufReader {
         let block_size = 32; // Q8_0 block size
         let n_blocks = total_elements.div_ceil(block_size);
 
-        // Q8_0 format: scale (f32) + quants (32 bytes)
-        let bytes_per_block = 4 + block_size;
+        // Q8_0 format matches llama.cpp block_q8_0:
+        //   - d: f16 scale
+        //   - qs[32]: signed 8-bit values
+        let bytes_per_block = 2 + block_size;
         let total_bytes = n_blocks * bytes_per_block;
 
         let mut data = vec![0u8; total_bytes];
@@ -596,18 +653,13 @@ impl GgufReader {
         let mut offset = 0;
 
         for _block in 0..n_blocks {
-            if offset + 4 > data.len() {
+            if offset + 2 > data.len() {
                 break;
             }
 
             // Read scale
-            let scale = f32::from_le_bytes([
-                data[offset],
-                data[offset + 1],
-                data[offset + 2],
-                data[offset + 3],
-            ]);
-            offset += 4;
+            let scale = half::f16::from_le_bytes([data[offset], data[offset + 1]]).to_f32();
+            offset += 2;
 
             // Read quantized values
             if offset + block_size > data.len() {
@@ -1208,6 +1260,46 @@ mod tests {
     }
 
     #[test]
+    fn test_load_q5_0_orders_low_half_before_high_half() {
+        let mut block = [0u8; 22];
+        block[0..2].copy_from_slice(&half::f16::from_f32(1.0).to_bits().to_le_bytes());
+        // Set the low half to -16 and the high half to +1 so ordering bugs are obvious.
+        block[2..6].copy_from_slice(&0xFFFF0000u32.to_le_bytes());
+        block[6..].fill(0x10);
+
+        let d = half::f16::from_le_bytes([block[0], block[1]]).to_f32();
+        let qh = u32::from_le_bytes([block[2], block[3], block[4], block[5]]);
+        let qs = &block[6..22];
+        let mut values = vec![0.0f32; 32];
+
+        for j in 0..16 {
+            let xh_0 = (((qh >> (j + 0)) << 4) & 0x10) as u8;
+            let xh_1 = (((qh >> (j + 12))) & 0x10) as u8;
+            let x0 = ((qs[j] & 0x0F) | xh_0) as i32 - 16;
+            let x1 = ((qs[j] >> 4) | xh_1) as i32 - 16;
+            values[j] = x0 as f32 * d;
+            values[16 + j] = x1 as f32 * d;
+        }
+
+        assert!(values[..16].iter().all(|&v| (v + 16.0).abs() < f32::EPSILON));
+        assert!(values[16..].iter().all(|&v| (v - 1.0).abs() < f32::EPSILON));
+    }
+
+    #[test]
+    fn test_load_q8_0_constant_block() {
+        let mut block = [0u8; 34];
+        block[0..2].copy_from_slice(&half::f16::from_f32(1.0).to_bits().to_le_bytes());
+        block[2..].fill(0x00);
+
+        let scale = half::f16::from_le_bytes([block[0], block[1]]).to_f32();
+        let quants = &block[2..];
+        let values: Vec<f32> = quants.iter().map(|&q| (q as i8) as f32 * scale).collect();
+
+        assert_eq!(values.len(), 32);
+        assert!(values.iter().all(|&v| v == 0.0));
+    }
+
+    #[test]
     fn test_dequantize_q5_k_bytes_constant_block() {
         let mut block = [0u8; Q5K_BLOCK_BYTES];
         block[0..2].copy_from_slice(&half::f16::from_f32(1.0).to_bits().to_le_bytes());
@@ -1218,4 +1310,5 @@ mod tests {
         assert_eq!(values.len(), QK_K);
         assert!(values.iter().all(|&v| (v - 1.0).abs() < f32::EPSILON));
     }
+
 }
