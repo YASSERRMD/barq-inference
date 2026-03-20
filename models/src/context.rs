@@ -10,6 +10,29 @@ use crate::loader::Model;
 use barq_core::error::{Error, Result};
 use barq_core::tensor::Tensor;
 
+fn stop_token_ids(metadata: &std::collections::HashMap<String, String>) -> Vec<i32> {
+    let mut ids = Vec::new();
+
+    for key in [
+        "tokenizer.ggml.eos_token_id",
+        "tokenizer.ggml.eot_token_id",
+        "tokenizer.ggml.eom_token_id",
+    ] {
+        if let Some(value) = metadata.get(key).and_then(|value| value.parse::<i32>().ok()) {
+            ids.push(value);
+        }
+    }
+
+    if ids.is_empty() {
+        // Llama-family fallback for older GGUF files without explicit special token metadata.
+        ids.extend([0, 2]);
+    }
+
+    ids.sort_unstable();
+    ids.dedup();
+    ids
+}
+
 /// Inference context parameters.
 ///
 /// # Example
@@ -398,6 +421,19 @@ impl ModelContext {
             return Err(Error::tensor("Empty logits"));
         }
 
+        // Greedy decoding is common in benchmarks and validation runs.
+        // Fast-path it so we do not pay for sorting and softmax when the
+        // caller only wants the argmax token.
+        if temperature <= 0.0 || top_k == 1 {
+            return logits
+                .iter()
+                .enumerate()
+                .filter(|&(_, &logit)| !logit.is_nan())
+                .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
+                .map(|(i, _)| i as i32)
+                .ok_or_else(|| Error::tensor("All logits are NaN"));
+        }
+
         // Filter out NaN values
         let valid_logits: Vec<(usize, f32)> = logits
             .iter()
@@ -494,6 +530,7 @@ impl ModelContext {
 
         let mut output = Vec::new();
         let mut current_tokens = tokens.to_vec();
+        let stop_tokens = stop_token_ids(self.model.metadata());
 
         // Process prompt
         let batch = Batch::from_tokens(&current_tokens);
@@ -502,17 +539,17 @@ impl ModelContext {
         // Generate tokens
         for _ in 0..max_tokens {
             let token = self.sample(&logits, temperature, top_k, top_p)?;
+
+            if stop_tokens.contains(&token) {
+                break;
+            }
+
             output.push(token);
             current_tokens.push(token);
 
             // Feed new token to get next logits
             let batch = Batch::single(token);
             logits = self.decode(&batch).await?;
-
-            // Check for EOS
-            if token == 0 || token == 2 {
-                break;
-            }
         }
 
         Ok(output)
@@ -566,6 +603,7 @@ impl ModelContext {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
 
     #[tokio::test]
     async fn test_kv_cache() {
@@ -585,5 +623,16 @@ mod tests {
         let params = ContextParams::default();
         assert_eq!(params.n_threads, 4);
         assert_eq!(params.n_batch, 512);
+    }
+
+    #[test]
+    fn test_stop_token_ids_from_metadata() {
+        let metadata = HashMap::from([
+            ("tokenizer.ggml.eos_token_id".to_string(), "151645".to_string()),
+            ("tokenizer.ggml.eot_token_id".to_string(), "151646".to_string()),
+            ("tokenizer.ggml.eom_token_id".to_string(), "151647".to_string()),
+        ]);
+
+        assert_eq!(stop_token_ids(&metadata), vec![151645, 151646, 151647]);
     }
 }

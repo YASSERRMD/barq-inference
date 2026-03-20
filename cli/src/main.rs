@@ -71,7 +71,7 @@ enum Commands {
     /// Run inference on a model
     Run {
         /// Model path (GGUF file)
-        #[arg(short, long)]
+        #[arg(long)]
         model: PathBuf,
 
         /// Draft model path for speculative decoding (optional)
@@ -79,11 +79,11 @@ enum Commands {
         draft_model: Option<PathBuf>,
 
         /// Prompt text
-        #[arg(short, long)]
+        #[arg(long)]
         prompt: String,
 
         /// Number of tokens to generate
-        #[arg(short, long, default_value = "128")]
+        #[arg(long, default_value = "128")]
         max_tokens: usize,
 
         /// Temperature (0.0 - 2.0)
@@ -135,7 +135,7 @@ enum Commands {
     /// Interactive chat mode
     Chat {
         /// Model path (GGUF file)
-        #[arg(short, long)]
+        #[arg(long)]
         model: PathBuf,
 
         /// System prompt
@@ -154,7 +154,7 @@ enum Commands {
         model: PathBuf,
 
         /// Number of iterations
-        #[arg(short, long, default_value = "10")]
+        #[arg(long, default_value = "10")]
         iterations: usize,
 
         /// Prompt length
@@ -169,18 +169,18 @@ enum Commands {
     /// Model information
     Info {
         /// Model path (GGUF file)
-        #[arg(short, long)]
+        #[arg(long)]
         model: PathBuf,
     },
 
     /// Convert model to GGUF format
     Convert {
         /// Input model path
-        #[arg(short, long)]
+        #[arg(long)]
         input: PathBuf,
 
         /// Output GGUF path
-        #[arg(short, long)]
+        #[arg(long)]
         output: PathBuf,
 
         /// Quantization type
@@ -195,30 +195,30 @@ enum Commands {
     /// Server mode
     Server {
         /// Model path (GGUF file)
-        #[arg(short, long)]
+        #[arg(long)]
         model: PathBuf,
 
         /// Host address
-        #[arg(short, long, default_value = "127.0.0.1")]
+        #[arg(long, default_value = "127.0.0.1")]
         host: String,
 
         /// Port
-        #[arg(short, long, default_value = "8080")]
+        #[arg(long, default_value = "8080")]
         port: u16,
     },
 
     /// OpenAI-compatible HTTP API server
     HttpServer {
         /// Model path (GGUF file)
-        #[arg(short, long)]
+        #[arg(long)]
         model: PathBuf,
 
         /// Host address
-        #[arg(short, long, default_value = "0.0.0.0")]
+        #[arg(long, default_value = "0.0.0.0")]
         host: String,
 
         /// Port
-        #[arg(short, long, default_value = "8000")]
+        #[arg(long, default_value = "8000")]
         port: u16,
 
         /// Maximum request context size
@@ -353,6 +353,7 @@ async fn main() -> anyhow::Result<()> {
                 mla,
                 fmoe,
                 ser,
+                cli.verbose,
             )
             .await
         }
@@ -448,6 +449,7 @@ async fn cmd_run(
     mla: bool,
     fmoe: bool,
     ser: bool,
+    verbose: bool,
 ) -> anyhow::Result<()> {
     use models::{
         context::{Batch, ContextParams},
@@ -455,7 +457,7 @@ async fn cmd_run(
     };
     use sampling::{JsonMode, JsonSchema};
     use std::sync::Arc;
-    use vocab::{GgufTokenizer, Tokenizer};
+    use vocab::{ChatMessage, ChatRole, ChatTemplate, GgufTokenizer, TokenType, Tokenizer};
 
     info!("Loading model: {:?}", model);
     info!("Prompt: {}", prompt);
@@ -470,29 +472,30 @@ async fn cmd_run(
     info!("Layers: {}", loaded_model.hparams().n_layer);
     let model_vocab_size = loaded_model.hparams().n_vocab as usize;
     let model_arch = loaded_model.arch();
+    let chat_template = if loaded_model.get_metadata("tokenizer.chat_template").is_some() {
+        Some(ChatTemplate::from_gguf_metadata(
+            Some(loaded_model.metadata()),
+            model_arch.name(),
+        ))
+    } else {
+        None
+    };
 
     // Create tokenizer
     let tokenizer = GgufTokenizer::from_gguf(loaded_model.metadata());
 
-    // Tokenize prompt
-    let tokenization_result = tokenizer.tokenize(&prompt, true).await?;
-    let prompt_tokens: Vec<i32> = tokenization_result
-        .ids
-        .iter()
-        .map(|&id| id as i32)
-        .collect();
+    let raw_prompt = prompt;
+    let prompt = if let Some(chat_template) = &chat_template {
+        info!("Chat template detected: rendering the prompt as a user message");
+        let messages = [ChatMessage::new(ChatRole::User, raw_prompt.as_str())];
+        chat_template
+            .render(Some(tokenizer.vocab()), None, &messages, true)
+            .map_err(|err| anyhow::anyhow!("failed to render chat prompt: {err}"))?
+    } else {
+        raw_prompt
+    };
 
-    info!("Prompt tokens: {}", prompt_tokens.len());
-    if prompt_tokens.is_empty() {
-        return Err(anyhow::anyhow!(
-            "Prompt tokenized to no tokens; cannot start generation"
-        ));
-    }
-    if json_mode {
-        info!("JSON mode: enabled");
-    }
-
-    // Create inference context
+    // Create inference context in parallel with prompt tokenization.
     let model_arc = Arc::new(loaded_model);
     let mut params = ContextParams {
         n_ctx: context_size as u32,
@@ -540,7 +543,42 @@ async fn cmd_run(
         }
     }
 
-    let context = create_context_for_model(Arc::clone(&model_arc), params)?;
+    let context_task = tokio::task::spawn_blocking({
+        let model_arc = Arc::clone(&model_arc);
+        move || create_context_for_model(model_arc, params)
+    });
+
+    // Tokenize prompt
+    let tokenization_result = tokenizer.tokenize(&prompt, true).await?;
+    let prompt_tokens: Vec<i32> = tokenization_result
+        .ids
+        .iter()
+        .map(|&id| id as i32)
+        .collect();
+
+    info!("Prompt tokens: {}", prompt_tokens.len());
+    if verbose {
+        info!("Prompt token IDs: {:?}", prompt_tokens);
+        info!("Prompt token texts: {:?}", tokenization_result.tokens);
+        let special_count = tokenizer
+            .vocab()
+            .iter()
+            .filter(|token| matches!(token.token_type, TokenType::Control | TokenType::UserDefined))
+            .count();
+        info!("Special token count: {}", special_count);
+    }
+    if prompt_tokens.is_empty() {
+        return Err(anyhow::anyhow!(
+            "Prompt tokenized to no tokens; cannot start generation"
+        ));
+    }
+    if json_mode {
+        info!("JSON mode: enabled");
+    }
+
+    let context = context_task
+        .await
+        .map_err(|err| anyhow::anyhow!("context creation task failed: {err}"))??;
     info!("Context created");
 
     // Generate tokens
@@ -595,6 +633,10 @@ async fn cmd_run(
         let parsed_json = JsonMode::validate_output(&output_text)?;
         let pretty_output = serde_json::to_string_pretty(&parsed_json)?;
 
+        if verbose {
+            info!("Generated token IDs: {:?}", generated_tokens);
+        }
+
         (generated_tokens, pretty_output)
     } else {
         let generated_tokens = context
@@ -602,6 +644,11 @@ async fn cmd_run(
             .await?;
         let generated_ids: Vec<u32> = generated_tokens.iter().map(|&id| id as u32).collect();
         let output_text = tokenizer.decode(&generated_ids).await?;
+
+        if verbose {
+            info!("Generated token IDs: {:?}", generated_tokens);
+        }
+
         (generated_tokens, output_text)
     };
 
@@ -685,43 +732,45 @@ async fn cmd_benchmark(
         .collect::<Vec<_>>()
         .join(" ");
     let context_params = ContextParams::cpu_optimized();
-    let temperature = 0.8f32;
-    let top_k = 40i32;
-    let top_p = 0.95f32;
+    let context_task = tokio::task::spawn_blocking({
+        let model_arc = Arc::clone(&model_arc);
+        move || create_context_for_model(model_arc, context_params)
+    });
+    let tokenization_result = tokenizer.tokenize(&synthetic_prompt, true).await?;
+    let prompt_tokens: Vec<i32> = tokenization_result
+        .ids
+        .iter()
+        .map(|&id| id as i32)
+        .collect();
+    if prompt_tokens.is_empty() {
+        return Err(anyhow::anyhow!(
+            "Synthetic prompt tokenized to no tokens; cannot benchmark"
+        ));
+    }
+    let context = Arc::new(
+        context_task
+            .await
+            .map_err(|err| anyhow::anyhow!("context creation task failed: {err}"))?
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?,
+    );
+    let prompt_batch = Batch::from_tokens(&prompt_tokens);
+    // Use greedy decoding for benchmark throughput so we measure inference,
+    // not sampling overhead.
+    let temperature = 0.0f32;
+    let top_k = 1i32;
+    let top_p = 1.0f32;
     let boxed_error = |msg: String| -> Box<dyn std::error::Error> {
         Box::new(std::io::Error::new(std::io::ErrorKind::Other, msg))
     };
 
     let result = bench.run({
-        let model_arc = Arc::clone(&model_arc);
-        let tokenizer = Arc::clone(&tokenizer);
-        let synthetic_prompt = synthetic_prompt.clone();
+        let context = Arc::clone(&context);
+        let prompt_batch = prompt_batch.clone();
         move || {
             tokio::task::block_in_place(|| {
                 let handle = tokio::runtime::Handle::current();
                 let start = std::time::Instant::now();
 
-                let context =
-                    create_context_for_model(Arc::clone(&model_arc), context_params.clone())
-                        .map_err(|e| boxed_error(e.to_string()))?;
-
-                let tokenization_result = handle
-                    .block_on(tokenizer.tokenize(&synthetic_prompt, true))
-                    .map_err(|e| boxed_error(e.to_string()))?;
-
-                let prompt_tokens: Vec<i32> = tokenization_result
-                    .ids
-                    .iter()
-                    .map(|&id| id as i32)
-                    .collect();
-
-                if prompt_tokens.is_empty() {
-                    return Err(boxed_error(
-                        "Synthetic prompt tokenized to no tokens".to_string(),
-                    ));
-                }
-
-                let prompt_batch = Batch::from_tokens(&prompt_tokens);
                 let mut logits = handle
                     .block_on(context.encode(&prompt_batch))
                     .map_err(|e| boxed_error(e.to_string()))?;
@@ -751,7 +800,7 @@ async fn cmd_benchmark(
 
                 let total_time = start.elapsed();
                 Ok(benchmark::BenchmarkSample {
-                    total_tokens: prompt_tokens.len() + generated_tokens,
+                    total_tokens: prompt_batch.token.len() + generated_tokens,
                     total_time,
                     ttft: if ttft.is_zero() { total_time } else { ttft },
                 })

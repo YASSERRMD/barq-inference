@@ -9,11 +9,54 @@ use crate::accelerate_blas;
 use crate::error::{Error, Result};
 use crate::metal_blas::MetalBlas;
 use rayon::prelude::*;
+use std::env;
 use std::sync::Arc;
 use std::sync::OnceLock;
 
 // Global Metal BLAS instance (lazy initialization)
 static METAL_BLAS: OnceLock<Option<Arc<MetalBlas>>> = OnceLock::new();
+static BACKEND_PREFERENCE: OnceLock<BackendPreference> = OnceLock::new();
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BackendPreference {
+    Auto,
+    Accelerate,
+    Metal,
+    Cpu,
+}
+
+fn backend_preference() -> BackendPreference {
+    *BACKEND_PREFERENCE.get_or_init(|| {
+        match env::var("BARQ_BLAS_BACKEND")
+            .ok()
+            .map(|value| value.trim().to_ascii_lowercase())
+            .as_deref()
+        {
+            Some("accelerate") | Some("blas") => BackendPreference::Accelerate,
+            Some("metal") => BackendPreference::Metal,
+            Some("cpu") => BackendPreference::Cpu,
+            Some("auto") | None | Some("") => BackendPreference::Auto,
+            Some(_) => BackendPreference::Auto,
+        }
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn should_prefer_metal_gemm(m: usize, k: usize, n: usize) -> bool {
+    let ops = (m as u128)
+        .saturating_mul(k as u128)
+        .saturating_mul(n as u128);
+    ops >= 1_000_000
+}
+
+#[cfg(target_os = "macos")]
+fn should_prefer_metal_gemv(m: usize, n: usize) -> bool {
+    let ops = (m as u128).saturating_mul(n as u128);
+    // Current Metal GEMV is still a naive kernel; Accelerate is faster for
+    // the attention score and output projection shapes used by the decoder.
+    // Keep Metal off the auto path until we have a dedicated tiled GEMV.
+    ops >= 1_000_000_000
+}
 
 /// Get or initialize Metal BLAS instance
 fn get_metal_blas() -> Option<&'static Arc<MetalBlas>> {
@@ -77,45 +120,72 @@ pub fn gemm_f32(a: &[f32], b: &[f32], m: usize, k: usize, n: usize) -> Result<Ve
         )));
     }
 
-    // Try Apple Accelerate (cBLAS) first - PRIMARY BACKEND on macOS
+    let preference = backend_preference();
+
     #[cfg(target_os = "macos")]
     {
-        if accelerate_blas::is_available() {
-            match accelerate_blas::sgemm(a, b, m, k, n) {
+        let prefer_metal_first = match preference {
+            BackendPreference::Metal => true,
+            BackendPreference::Accelerate => false,
+            BackendPreference::Cpu => false,
+            BackendPreference::Auto => should_prefer_metal_gemm(m, k, n),
+        };
+
+        if !matches!(preference, BackendPreference::Cpu) && !prefer_metal_first {
+            if accelerate_blas::is_available() {
+                match accelerate_blas::sgemm(a, b, m, k, n) {
+                    Ok(result) => {
+                        static FIRST_CALL: std::sync::Once = std::sync::Once::new();
+                        FIRST_CALL.call_once(|| {
+                            eprintln!("Using Apple Accelerate cBLAS for matrix multiplication");
+                        });
+                        return Ok(result);
+                    }
+                    Err(e) => {
+                        static FIRST_FAIL: std::sync::Once = std::sync::Once::new();
+                        FIRST_FAIL.call_once(|| {
+                            eprintln!("Accelerate GEMM failed: {}, falling back to Metal", e);
+                        });
+                    }
+                }
+            }
+        }
+
+        if let Some(metal_blas) = get_metal_blas() {
+            match metal_blas.gemm(a, b, m, k, n) {
                 Ok(result) => {
-                    // Only print on first few calls to avoid spam
-                    static FIRST_CALL: std::sync::Once = std::sync::Once::new();
-                    FIRST_CALL.call_once(|| {
-                        eprintln!("Using Apple Accelerate cBLAS for matrix multiplication");
+                    static FIRST_METAL: std::sync::Once = std::sync::Once::new();
+                    FIRST_METAL.call_once(|| {
+                        eprintln!("Using Metal GPU for matrix multiplication");
                     });
                     return Ok(result);
                 }
                 Err(e) => {
-                    // Only print once
-                    static FIRST_FAIL: std::sync::Once = std::sync::Once::new();
-                    FIRST_FAIL.call_once(|| {
-                        eprintln!("Accelerate GEMM failed: {}, falling back to Metal", e);
+                    static FIRST_METAL_FAIL: std::sync::Once = std::sync::Once::new();
+                    FIRST_METAL_FAIL.call_once(|| {
+                        eprintln!("Metal GEMM failed: {}, falling back to CPU", e);
                     });
                 }
             }
         }
-    }
 
-    // Try Metal GPU acceleration next
-    if let Some(metal_blas) = get_metal_blas() {
-        match metal_blas.gemm(a, b, m, k, n) {
-            Ok(result) => {
-                static FIRST_METAL: std::sync::Once = std::sync::Once::new();
-                FIRST_METAL.call_once(|| {
-                    eprintln!("Using Metal GPU for matrix multiplication");
-                });
-                return Ok(result);
-            }
-            Err(e) => {
-                static FIRST_METAL_FAIL: std::sync::Once = std::sync::Once::new();
-                FIRST_METAL_FAIL.call_once(|| {
-                    eprintln!("Metal GEMM failed: {}, falling back to CPU", e);
-                });
+        if prefer_metal_first && preference != BackendPreference::Cpu {
+            if accelerate_blas::is_available() {
+                match accelerate_blas::sgemm(a, b, m, k, n) {
+                    Ok(result) => {
+                        static FIRST_CALL: std::sync::Once = std::sync::Once::new();
+                        FIRST_CALL.call_once(|| {
+                            eprintln!("Using Apple Accelerate cBLAS for matrix multiplication");
+                        });
+                        return Ok(result);
+                    }
+                    Err(e) => {
+                        static FIRST_FAIL: std::sync::Once = std::sync::Once::new();
+                        FIRST_FAIL.call_once(|| {
+                            eprintln!("Accelerate GEMM failed after Metal fallback: {}", e);
+                        });
+                    }
+                }
             }
         }
     }
@@ -174,14 +244,46 @@ pub fn gemv_f32(a: &[f32], x: &[f32], m: usize, n: usize) -> Result<Vec<f32>> {
         )));
     }
 
-    // Try Apple Accelerate (cBLAS) first on macOS
+    let preference = backend_preference();
+
+    // Try Apple Accelerate (cBLAS) first on macOS unless Metal is explicitly
+    // preferred or the workload is large enough to make the GPU path worthwhile.
     #[cfg(target_os = "macos")]
     {
-        if accelerate_blas::is_available() {
-            match accelerate_blas::sgemv(a, x, m, n) {
+        let prefer_metal_first = match preference {
+            BackendPreference::Metal => true,
+            BackendPreference::Accelerate => false,
+            BackendPreference::Cpu => false,
+            BackendPreference::Auto => should_prefer_metal_gemv(m, n),
+        };
+
+        if !matches!(preference, BackendPreference::Cpu) && !prefer_metal_first {
+            if accelerate_blas::is_available() {
+                match accelerate_blas::sgemv(a, x, m, n) {
+                    Ok(result) => return Ok(result),
+                    Err(e) => {
+                        eprintln!("Accelerate GEMV failed: {}, falling back to Metal", e);
+                    }
+                }
+            }
+        }
+
+        if let Some(metal_blas) = get_metal_blas() {
+            match metal_blas.gemv(a, x, m, n) {
                 Ok(result) => return Ok(result),
                 Err(e) => {
-                    eprintln!("Accelerate GEMV failed: {}, falling back to CPU", e);
+                    eprintln!("Metal GEMV failed: {}, falling back to CPU", e);
+                }
+            }
+        }
+
+        if prefer_metal_first && preference != BackendPreference::Cpu {
+            if accelerate_blas::is_available() {
+                match accelerate_blas::sgemv(a, x, m, n) {
+                    Ok(result) => return Ok(result),
+                    Err(e) => {
+                        eprintln!("Accelerate GEMV failed after Metal fallback: {}", e);
+                    }
                 }
             }
         }

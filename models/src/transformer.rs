@@ -2,13 +2,14 @@
 //!
 //! Key design decisions:
 //! - Weights are dequantized **once** at model-load time (WeightCache)
-//! - Weights are stored **pre-transposed** so every gemm call is a simple
-//!   row-major A · B without any runtime transpose allocation
+//! - Projection weights are stored **pre-transposed** so every gemm call is a
+//!   simple row-major A · B without any runtime transpose allocation
 //! - Single-token decode path uses cblas_sgemv (matrix-vector) instead of
 //!   cblas_sgemm, avoiding the setup overhead when seq_len == 1
 //! - Attention heads are parallelised with rayon
 //! - Profiling is printed only in debug mode
 
+use crate::arch::LlmArch;
 use crate::context::KVCache;
 use crate::loader::Model;
 use crate::weight_cache::WeightCache;
@@ -26,6 +27,11 @@ pub struct LlamaTransformer {
     n_head_kv: usize,
     head_dim: usize,
     n_ff: usize,
+    rope_freq_base: f32,
+    rope_freq_scale: f32,
+    rms_norm_eps: f32,
+    rope_inv_freq: Vec<f32>,
+    rope_layout: RopeLayout,
     /// Pre-dequantized, pre-transposed weight cache
     weight_cache: Arc<WeightCache>,
 }
@@ -40,6 +46,13 @@ impl LlamaTransformer {
         let n_layer = hparams.n_layer as usize;
         let n_ff = hparams.n_ff as usize;
         let head_dim = n_embd / n_head;
+        let rope_freq_base = hparams.rope_freq_base;
+        let rope_freq_scale = hparams.rope_freq_scale;
+        let rms_norm_eps = hparams.rms_norm_eps;
+        let rope_inv_freq = (0..(head_dim / 2))
+            .map(|i| rope_freq_base.powf(-2.0 * i as f32 / head_dim as f32))
+            .collect();
+        let rope_layout = RopeLayout::from_arch(model.arch());
 
         // Dequantize + pre-transpose all weights once
         let weight_cache = Arc::new(WeightCache::new());
@@ -53,6 +66,11 @@ impl LlamaTransformer {
             n_head_kv,
             head_dim,
             n_ff,
+            rope_freq_base,
+            rope_freq_scale,
+            rms_norm_eps,
+            rope_inv_freq,
+            rope_layout,
             weight_cache,
         })
     }
@@ -78,10 +96,11 @@ impl LlamaTransformer {
     // ── Embedding ─────────────────────────────────────────────────────────────
 
     fn get_embeddings(&self, tokens: &[i32]) -> Result<Vec<f32>> {
-        let emb_data = self
+        let emb_tensor = self
             .weight_cache
             .get_raw("token_embd.weight")
             .ok_or_else(|| Error::tensor("token_embd.weight not found in cache"))?;
+        let emb_data = emb_tensor.as_f32_slice()?;
 
         let n_embd = self.n_embd;
         let vocab_size = emb_data.len() / n_embd;
@@ -89,8 +108,8 @@ impl LlamaTransformer {
 
         for (i, &token_id) in tokens.iter().enumerate() {
             if token_id >= 0 && (token_id as usize) < vocab_size {
-                let src_off = (token_id as usize) * n_embd;
                 let dst_off = i * n_embd;
+                let src_off = (token_id as usize) * n_embd;
                 embeddings[dst_off..dst_off + n_embd]
                     .copy_from_slice(&emb_data[src_off..src_off + n_embd]);
             }
@@ -127,21 +146,23 @@ impl LlamaTransformer {
     // ── RMSNorm ───────────────────────────────────────────────────────────────
 
     fn rms_norm(&self, hidden: &[f32], weight_name: &str) -> Result<Vec<f32>> {
-        let weight_data = match self.weight_cache.get_raw(weight_name) {
+        let weight_tensor = match self.weight_cache.get_raw(weight_name) {
             Some(w) => w,
             None => return Ok(hidden.to_vec()),
         };
+        let weight_data = weight_tensor.as_f32_slice()?;
 
         let n_embd = self.n_embd;
         let seq_len = hidden.len() / n_embd;
         let mut output = vec![0.0f32; hidden.len()];
-        let eps = 1e-5f32;
+        let eps = self.rms_norm_eps.max(f32::EPSILON);
 
         for i in 0..seq_len {
             let start = i * n_embd;
             let slice = &hidden[start..start + n_embd];
             let sum_sq: f32 = slice.iter().map(|&x| x * x).sum();
-            let rms_inv = (n_embd as f32 / (sum_sq + eps)).sqrt();
+            let mean_square = sum_sq / n_embd as f32;
+            let rms_inv = 1.0 / (mean_square + eps).sqrt();
             for j in 0..n_embd {
                 output[start + j] = hidden[start + j] * rms_inv * weight_data[j];
             }
@@ -181,9 +202,43 @@ impl LlamaTransformer {
             n_head_kv * head_dim,
         )?;
 
+        let q = self.add_bias(
+            q,
+            &format!("blk.{}.attn_q.bias", layer_idx),
+            n_head * head_dim,
+        )?;
+        let k = self.add_bias(
+            k,
+            &format!("blk.{}.attn_k.bias", layer_idx),
+            n_head_kv * head_dim,
+        )?;
+        let v = self.add_bias(
+            v,
+            &format!("blk.{}.attn_v.bias", layer_idx),
+            n_head_kv * head_dim,
+        )?;
+
         // Apply RoPE in-place
-        let q_rope = apply_rope(&q, seq_len, n_head, head_dim, start_pos);
-        let k_rope = apply_rope(&k, seq_len, n_head_kv, head_dim, start_pos);
+        let q_rope = apply_rope(
+            &q,
+            seq_len,
+            n_head,
+            head_dim,
+            start_pos,
+            self.rope_freq_scale,
+            &self.rope_inv_freq,
+            self.rope_layout,
+        );
+        let k_rope = apply_rope(
+            &k,
+            seq_len,
+            n_head_kv,
+            head_dim,
+            start_pos,
+            self.rope_freq_scale,
+            &self.rope_inv_freq,
+            self.rope_layout,
+        );
         let v_trans = transpose_heads(&v, seq_len, n_head_kv, head_dim);
 
         // Update KV Cache
@@ -216,15 +271,15 @@ impl LlamaTransformer {
         if let Some((w_t, in_dim, n)) = self.weight_cache.get_proj(weight_name) {
             debug_assert_eq!(in_dim, n_embd);
             debug_assert_eq!(n, out_dim);
-            return blas::gemm_f32(hidden, &w_t, seq_len, in_dim, n);
+            return blas::gemm_f32(hidden, w_t.as_ref(), seq_len, in_dim, n);
         }
 
-        // Fallback: load raw and transpose on the fly
+        // Fallback: load raw weights directly from the model and transpose
+        // into the layout expected by gemm_f32.
         let tensor = self.model.get_tensor_blocking(weight_name);
         match tensor {
             Some(t) => {
                 let raw = t.as_f32_slice()?.to_vec();
-                // raw is (out_dim, n_embd); transpose to (n_embd, out_dim)
                 let mut w_t = vec![0.0f32; n_embd * out_dim];
                 for o in 0..out_dim {
                     for i in 0..n_embd {
@@ -259,7 +314,7 @@ impl LlamaTransformer {
 
         let head_outputs: Vec<Vec<f32>> = (0..n_head)
             .into_par_iter()
-            .map(|h| {
+            .map(|h| -> Result<Vec<f32>> {
                 let kv_h = h * n_head_kv / n_head;
 
                 let q_off = h * q_len * head_dim;
@@ -269,27 +324,24 @@ impl LlamaTransformer {
                 let v_head = kv_cache.get_v_head(layer_idx, kv_h);
 
                 let mut out = vec![0.0f32; q_len * head_dim];
+                let inv_scale = 1.0f32 / scale;
 
                 for i in 0..q_len {
-                    let mut scores = vec![0.0f32; kv_len];
-                    // Q_i · K_j
-                    for j in 0..kv_len {
-                        // Apply causal mask
-                        if j > start_pos + i {
-                            scores[j] = f32::NEG_INFINITY;
-                            continue;
-                        }
+                    let q_slice = &q_head[i * head_dim..(i + 1) * head_dim];
+                    let mut scores = blas::gemv_f32(k_head, q_slice, kv_len, head_dim)?;
 
-                        let mut dot = 0.0f32;
-                        for d in 0..head_dim {
-                            dot += unsafe {
-                                q_head.get_unchecked(i * head_dim + d)
-                                    * k_head.get_unchecked(j * head_dim + d)
-                            };
-                        }
-                        scores[j] = dot / scale;
+                    for score in &mut scores {
+                        *score *= inv_scale;
                     }
-                    // Softmax
+
+                    let valid_len = start_pos + i + 1;
+                    if valid_len < kv_len {
+                        for score in &mut scores[valid_len..] {
+                            *score = f32::NEG_INFINITY;
+                        }
+                    }
+
+                    // Softmax over the visible prefix only.
                     let max_s = scores.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
                     let mut exp_sum = 0.0f32;
                     for s in scores.iter_mut() {
@@ -299,18 +351,15 @@ impl LlamaTransformer {
                     for s in scores.iter_mut() {
                         *s /= exp_sum;
                     }
-                    // Weighted sum of V
-                    for j in 0..kv_len {
-                        let p = unsafe { *scores.get_unchecked(j) };
-                        for d in 0..head_dim {
-                            out[i * head_dim + d] +=
-                                p * unsafe { *v_head.get_unchecked(j * head_dim + d) };
-                        }
-                    }
+
+                    let head_out = blas::gemm_f32(&scores, v_head, 1, kv_len, head_dim)?;
+                    out[i * head_dim..(i + 1) * head_dim].copy_from_slice(&head_out);
                 }
-                out
+                Ok(out)
             })
-            .collect();
+            .collect::<Vec<_>>()
+            .into_iter()
+            .collect::<Result<Vec<_>>>()?;
 
         // Interleave head outputs: [seq, head, head_dim]
         let mut output = vec![0.0f32; q_len * n_head * head_dim];
@@ -371,10 +420,11 @@ impl LlamaTransformer {
         if let Some((w_t, k, n)) = self.weight_cache.get_proj(weight_name) {
             debug_assert_eq!(k, in_dim, "in_dim mismatch for {}", weight_name);
             debug_assert_eq!(n, out_dim, "out_dim mismatch for {}", weight_name);
-            return blas::gemm_f32(hidden, &w_t, seq_len, k, n);
+            return blas::gemm_f32(hidden, w_t.as_ref(), seq_len, k, n);
         }
 
-        // Fallback
+        // Fallback: load raw weights directly from the model and transpose
+        // into the layout expected by gemm_f32.
         let tensor = self.model.get_tensor_blocking(weight_name);
         match tensor {
             Some(t) => {
@@ -391,28 +441,60 @@ impl LlamaTransformer {
         }
     }
 
+    fn add_bias(&self, hidden: Vec<f32>, bias_name: &str, dim: usize) -> Result<Vec<f32>> {
+        let bias_tensor = match self.weight_cache.get_raw(bias_name) {
+            Some(bias) => bias,
+            _ => return Ok(hidden),
+        };
+        let bias = bias_tensor.as_f32_slice()?;
+        if bias.len() != dim {
+            return Ok(hidden);
+        }
+
+        let seq_len = hidden.len() / dim;
+        let mut output = hidden;
+        for i in 0..seq_len {
+            let row = &mut output[i * dim..(i + 1) * dim];
+            for (dst, &bias_val) in row.iter_mut().zip(bias.iter()) {
+                *dst += bias_val;
+            }
+        }
+
+        Ok(output)
+    }
+
     // ── Final output ──────────────────────────────────────────────────────────
 
     fn final_output(&self, hidden: &[f32]) -> Result<Vec<f32>> {
         let normalized = self.rms_norm(hidden, "output_norm.weight")?;
 
-        let output_data = match self.weight_cache.get_raw("output.weight") {
-            Some(d) => d,
-            None => {
-                return Ok(vec![0.0f32; self.model.hparams().n_vocab as usize]);
-            }
-        };
-
         let n_embd = self.n_embd;
         let seq_len = hidden.len() / n_embd;
+        let last = &normalized[(seq_len - 1) * n_embd..seq_len * n_embd];
+        let output_tensor = self
+            .weight_cache
+            .get_raw("output.weight")
+            .or_else(|| self.weight_cache.get_raw("token_embd.weight"))
+            .ok_or_else(|| Error::tensor("No output or token embedding weight found"))?;
+        let output_data = output_tensor.as_f32_slice()?;
+        let output_bias = self.weight_cache.get_raw("output.bias");
+
         let vocab_size = output_data.len() / n_embd;
 
-        // Use last token hidden state: (1, n_embd)
-        let last = &normalized[(seq_len - 1) * n_embd..seq_len * n_embd];
+        // GGUF keeps tied output weights in [vocab, n_embd] layout.
+        // A matrix-vector multiply yields one logit per vocabulary entry.
+        let mut logits = blas::gemv_f32(&output_data, last, vocab_size, n_embd)?;
+        if let Some(bias_tensor) = output_bias {
+            if let Ok(bias) = bias_tensor.as_f32_slice() {
+                if bias.len() == logits.len() {
+                    for (logit, &bias_val) in logits.iter_mut().zip(bias.iter()) {
+                        *logit += bias_val;
+                    }
+                }
+            }
+        }
 
-        // output.weight is (vocab_size, n_embd); compute last @ W^T = (1, vocab_size)
-        // Use gemv for single-token decode
-        blas::gemv_f32(&output_data, last, vocab_size, n_embd)
+        Ok(logits)
     }
 }
 
@@ -435,10 +517,15 @@ fn apply_rope(
     n_heads: usize,
     head_dim: usize,
     start_pos: usize,
+    rope_freq_scale: f32,
+    rope_inv_freq: &[f32],
+    rope_layout: RopeLayout,
 ) -> Vec<f32> {
     // Input: [seq_len, n_heads * head_dim]
     // Output: [n_heads, seq_len, head_dim]
     let mut out = vec![0.0f32; n_heads * seq_len * head_dim];
+
+    debug_assert!(head_dim % 2 == 0, "RoPE head_dim must be even");
 
     for h in 0..n_heads {
         for pos in 0..seq_len {
@@ -446,22 +533,64 @@ fn apply_rope(
             let dst_base = h * seq_len * head_dim + pos * head_dim;
             let abs_pos = start_pos + pos;
 
-            let half = head_dim / 2;
-            for i in 0..half {
-                let theta = 10000.0_f32.powf(-2.0 * i as f32 / head_dim as f32);
-                let angle = abs_pos as f32 * theta;
-                let (sin_a, cos_a) = angle.sin_cos();
+            match rope_layout {
+                RopeLayout::Interleaved => {
+                    for i in (0..head_dim).step_by(2) {
+                        let pair_idx = i / 2;
+                        let angle = (abs_pos as f32 * rope_freq_scale) * rope_inv_freq[pair_idx];
+                        let (sin_a, cos_a) = angle.sin_cos();
 
-                let x0 = x[src_base + i];
-                let x1 = x[src_base + i + half];
+                        let x0 = x[src_base + i];
+                        let x1 = x[src_base + i + 1];
 
-                out[dst_base + i] = x0 * cos_a - x1 * sin_a;
-                out[dst_base + i + half] = x0 * sin_a + x1 * cos_a;
+                        out[dst_base + i] = x0 * cos_a - x1 * sin_a;
+                        out[dst_base + i + 1] = x0 * sin_a + x1 * cos_a;
+                    }
+                }
+                RopeLayout::SplitHalf => {
+                    let half_dim = head_dim / 2;
+                    for i in 0..half_dim {
+                        let angle = (abs_pos as f32 * rope_freq_scale) * rope_inv_freq[i];
+                        let (sin_a, cos_a) = angle.sin_cos();
+
+                        let x0 = x[src_base + i];
+                        let x1 = x[src_base + i + half_dim];
+
+                        out[dst_base + i] = x0 * cos_a - x1 * sin_a;
+                        out[dst_base + i + half_dim] = x0 * sin_a + x1 * cos_a;
+                    }
+                }
             }
         }
     }
 
     out
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RopeLayout {
+    /// Consecutive even/odd pairs: [x0, x1, x2, x3, ...]
+    Interleaved,
+    /// Split-half layout used by Qwen/GPT-NeoX family models: [x0..xn/2, xN/2..xN]
+    SplitHalf,
+}
+
+impl RopeLayout {
+    fn from_arch(arch: LlmArch) -> Self {
+        match arch {
+            LlmArch::Qwen
+            | LlmArch::Qwen2
+            | LlmArch::Qwen2Moe
+            | LlmArch::Qwen3
+            | LlmArch::Qwen2Vl
+            | LlmArch::GptNeoX
+            | LlmArch::Phi2
+            | LlmArch::Phi3
+            | LlmArch::Gemma
+            | LlmArch::Gemma2 => Self::SplitHalf,
+            _ => Self::Interleaved,
+        }
+    }
 }
 
 /// Transpose flat [seq, n_heads, head_dim] layout
@@ -483,8 +612,75 @@ fn transpose_heads(x: &[f32], seq_len: usize, n_heads: usize, head_dim: usize) -
 
 #[cfg(test)]
 mod tests {
+    use super::apply_rope;
+    use super::RopeLayout;
+
     #[test]
     fn test_llama_transformer_creation() {
         // Placeholder: requires real GGUF model
+    }
+
+    #[test]
+    fn test_apply_rope_rotates_consecutive_pairs() {
+        let x = vec![1.0, 2.0, 3.0, 4.0];
+        let rope_inv_freq = vec![1.0, 10_000.0f32.powf(-1.0 / 2.0)];
+        let out = apply_rope(
+            &x,
+            1,
+            1,
+            4,
+            0,
+            1.0,
+            &rope_inv_freq,
+            RopeLayout::Interleaved,
+        );
+
+        assert_eq!(out.len(), 4);
+        assert!((out[0] - 1.0).abs() < 1e-6);
+        assert!((out[1] - 2.0).abs() < 1e-6);
+        assert!((out[2] - 3.0).abs() < 1e-6);
+        assert!((out[3] - 4.0).abs() < 1e-6);
+
+        let rotated = apply_rope(
+            &x,
+            1,
+            1,
+            4,
+            1,
+            1.0,
+            &rope_inv_freq,
+            RopeLayout::Interleaved,
+        );
+        let (s0, c0) = rope_inv_freq[0].sin_cos();
+        let (s1, c1) = rope_inv_freq[1].sin_cos();
+
+        assert!((rotated[0] - (1.0 * c0 - 2.0 * s0)).abs() < 1e-6);
+        assert!((rotated[1] - (1.0 * s0 + 2.0 * c0)).abs() < 1e-6);
+        assert!((rotated[2] - (3.0 * c1 - 4.0 * s1)).abs() < 1e-6);
+        assert!((rotated[3] - (3.0 * s1 + 4.0 * c1)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_apply_rope_rotates_split_half_pairs() {
+        let x = vec![1.0, 2.0, 3.0, 4.0];
+        let rope_inv_freq = vec![1.0, 10_000.0f32.powf(-1.0 / 2.0)];
+        let rotated = apply_rope(
+            &x,
+            1,
+            1,
+            4,
+            1,
+            1.0,
+            &rope_inv_freq,
+            RopeLayout::SplitHalf,
+        );
+
+        let (s0, c0) = rope_inv_freq[0].sin_cos();
+        let (s1, c1) = rope_inv_freq[1].sin_cos();
+
+        assert!((rotated[0] - (1.0 * c0 - 3.0 * s0)).abs() < 1e-6);
+        assert!((rotated[2] - (1.0 * s0 + 3.0 * c0)).abs() < 1e-6);
+        assert!((rotated[1] - (2.0 * c1 - 4.0 * s1)).abs() < 1e-6);
+        assert!((rotated[3] - (2.0 * s1 + 4.0 * c1)).abs() < 1e-6);
     }
 }
