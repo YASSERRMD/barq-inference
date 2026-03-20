@@ -495,35 +495,7 @@ async fn cmd_run(
         raw_prompt
     };
 
-    // Tokenize prompt
-    let tokenization_result = tokenizer.tokenize(&prompt, true).await?;
-    let prompt_tokens: Vec<i32> = tokenization_result
-        .ids
-        .iter()
-        .map(|&id| id as i32)
-        .collect();
-
-    info!("Prompt tokens: {}", prompt_tokens.len());
-    if verbose {
-        info!("Prompt token IDs: {:?}", prompt_tokens);
-        info!("Prompt token texts: {:?}", tokenization_result.tokens);
-        let special_count = tokenizer
-            .vocab()
-            .iter()
-            .filter(|token| matches!(token.token_type, TokenType::Control | TokenType::UserDefined))
-            .count();
-        info!("Special token count: {}", special_count);
-    }
-    if prompt_tokens.is_empty() {
-        return Err(anyhow::anyhow!(
-            "Prompt tokenized to no tokens; cannot start generation"
-        ));
-    }
-    if json_mode {
-        info!("JSON mode: enabled");
-    }
-
-    // Create inference context
+    // Create inference context in parallel with prompt tokenization.
     let model_arc = Arc::new(loaded_model);
     let mut params = ContextParams {
         n_ctx: context_size as u32,
@@ -571,7 +543,42 @@ async fn cmd_run(
         }
     }
 
-    let context = create_context_for_model(Arc::clone(&model_arc), params)?;
+    let context_task = tokio::task::spawn_blocking({
+        let model_arc = Arc::clone(&model_arc);
+        move || create_context_for_model(model_arc, params)
+    });
+
+    // Tokenize prompt
+    let tokenization_result = tokenizer.tokenize(&prompt, true).await?;
+    let prompt_tokens: Vec<i32> = tokenization_result
+        .ids
+        .iter()
+        .map(|&id| id as i32)
+        .collect();
+
+    info!("Prompt tokens: {}", prompt_tokens.len());
+    if verbose {
+        info!("Prompt token IDs: {:?}", prompt_tokens);
+        info!("Prompt token texts: {:?}", tokenization_result.tokens);
+        let special_count = tokenizer
+            .vocab()
+            .iter()
+            .filter(|token| matches!(token.token_type, TokenType::Control | TokenType::UserDefined))
+            .count();
+        info!("Special token count: {}", special_count);
+    }
+    if prompt_tokens.is_empty() {
+        return Err(anyhow::anyhow!(
+            "Prompt tokenized to no tokens; cannot start generation"
+        ));
+    }
+    if json_mode {
+        info!("JSON mode: enabled");
+    }
+
+    let context = context_task
+        .await
+        .map_err(|err| anyhow::anyhow!("context creation task failed: {err}"))??;
     info!("Context created");
 
     // Generate tokens
@@ -725,10 +732,10 @@ async fn cmd_benchmark(
         .collect::<Vec<_>>()
         .join(" ");
     let context_params = ContextParams::cpu_optimized();
-    let context = Arc::new(
-        create_context_for_model(Arc::clone(&model_arc), context_params.clone())
-            .map_err(|e| anyhow::anyhow!(e.to_string()))?,
-    );
+    let context_task = tokio::task::spawn_blocking({
+        let model_arc = Arc::clone(&model_arc);
+        move || create_context_for_model(model_arc, context_params)
+    });
     let tokenization_result = tokenizer.tokenize(&synthetic_prompt, true).await?;
     let prompt_tokens: Vec<i32> = tokenization_result
         .ids
@@ -740,6 +747,12 @@ async fn cmd_benchmark(
             "Synthetic prompt tokenized to no tokens; cannot benchmark"
         ));
     }
+    let context = Arc::new(
+        context_task
+            .await
+            .map_err(|err| anyhow::anyhow!("context creation task failed: {err}"))?
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?,
+    );
     let prompt_batch = Batch::from_tokens(&prompt_tokens);
     // Use greedy decoding for benchmark throughput so we measure inference,
     // not sampling overhead.
