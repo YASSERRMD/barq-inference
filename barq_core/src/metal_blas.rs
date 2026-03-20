@@ -3,6 +3,7 @@
 //! Provides GPU-accelerated matrix multiplication using Metal compute shaders.
 
 use crate::error::{Error, Result};
+use std::cell::RefCell;
 use std::sync::Arc;
 
 #[cfg(feature = "metal")]
@@ -17,8 +18,15 @@ pub struct MetalBlas {
     command_queue: CommandQueue,
     /// Compute pipeline for matrix multiplication
     matmul_pipeline: ComputePipelineState,
+    /// Compute pipeline for tiled matrix multiplication
+    matmul_tiled_pipeline: ComputePipelineState,
     /// Compute pipeline for matrix-vector multiplication
     gemv_pipeline: ComputePipelineState,
+}
+
+#[cfg(feature = "metal")]
+thread_local! {
+    static METAL_SCRATCH: RefCell<Option<MetalScratch>> = RefCell::new(None);
 }
 
 #[cfg(feature = "metal")]
@@ -42,6 +50,13 @@ impl MetalBlas {
             .new_compute_pipeline_state_with_function(&matmul_function)
             .map_err(|e| Error::backend(format!("Failed to create matmul pipeline: {:?}", e)))?;
 
+        let matmul_tiled_function = library
+            .get_function("matmul_tiled_kernel", None)
+            .map_err(|e| Error::backend(format!("Failed to get matmul_tiled_kernel: {:?}", e)))?;
+        let matmul_tiled_pipeline = device
+            .new_compute_pipeline_state_with_function(&matmul_tiled_function)
+            .map_err(|e| Error::backend(format!("Failed to create tiled matmul pipeline: {:?}", e)))?;
+
         // Create gemv pipeline
         let gemv_function = library
             .get_function("gemv_kernel", None)
@@ -54,6 +69,7 @@ impl MetalBlas {
             device,
             command_queue,
             matmul_pipeline,
+            matmul_tiled_pipeline,
             gemv_pipeline,
         })
     }
@@ -75,8 +91,9 @@ kernel void matmul_kernel(
     constant uint& n [[buffer(5)]],
     uint2 gid [[thread_position_in_grid]]
 ) {
-    uint row = gid.x;
-    uint col = gid.y;
+    // We dispatch the grid as (columns, rows), so map x -> col and y -> row.
+    uint row = gid.y;
+    uint col = gid.x;
 
     if (row >= m || col >= n) return;
 
@@ -98,13 +115,13 @@ kernel void matmul_tiled_kernel(
     constant uint& N [[buffer(5)]],
     threadgroup float* tileA [[threadgroup(0)]],
     threadgroup float* tileB [[threadgroup(1)]],
-    uint2 tid [[thread_position_in_threadgroup]],
-    uint2 gid [[thread_position_in_grid]]
+    uint2 tgid [[threadgroup_position_in_grid]],
+    uint2 tid [[thread_position_in_threadgroup]]
 ) {
-    const uint TILE_SIZE = 32;
+    const uint TILE_SIZE = 16;
 
-    uint row = gid.y * TILE_SIZE + tid.y;
-    uint col = gid.x * TILE_SIZE + tid.x;
+    uint row = tgid.y * TILE_SIZE + tid.y;
+    uint col = tgid.x * TILE_SIZE + tid.x;
 
     float sum = 0.0;
 
@@ -174,9 +191,77 @@ kernel void gemv_kernel(
 
     /// Matrix multiplication: C = A * B
     pub fn gemm(&self, a: &[f32], b: &[f32], m: usize, k: usize, n: usize) -> Result<Vec<f32>> {
+        METAL_SCRATCH.with(|scratch| {
+            let mut scratch = scratch.borrow_mut();
+            if scratch.is_none() {
+                *scratch = Some(MetalScratch::new(&self.device)?);
+            }
+
+            let scratch = scratch.as_mut().expect("scratch initialized");
+            scratch.gemm(self, a, b, m, k, n)
+        })
+    }
+
+    /// Matrix-vector multiplication: y = A * x
+    pub fn gemv(&self, a: &[f32], x: &[f32], m: usize, n: usize) -> Result<Vec<f32>> {
+        METAL_SCRATCH.with(|scratch| {
+            let mut scratch = scratch.borrow_mut();
+            if scratch.is_none() {
+                *scratch = Some(MetalScratch::new(&self.device)?);
+            }
+
+            let scratch = scratch.as_mut().expect("scratch initialized");
+            scratch.gemv(self, a, x, m, n)
+        })
+    }
+}
+
+#[cfg(feature = "metal")]
+#[derive(Debug)]
+struct MetalScratch {
+    a: MetalScratchBuffer,
+    b: MetalScratchBuffer,
+    c: MetalScratchBuffer,
+}
+
+#[cfg(feature = "metal")]
+impl MetalScratch {
+    fn new(device: &Device) -> Result<Self> {
+        Ok(Self {
+            a: MetalScratchBuffer::new(device, 0)?,
+            b: MetalScratchBuffer::new(device, 0)?,
+            c: MetalScratchBuffer::new(device, 0)?,
+        })
+    }
+
+    fn ensure_capacity(
+        &mut self,
+        device: &Device,
+        a_size: usize,
+        b_size: usize,
+        c_size: usize,
+    ) -> Result<()> {
+        self.a.ensure_capacity(device, a_size)?;
+        self.b.ensure_capacity(device, b_size)?;
+        self.c.ensure_capacity(device, c_size)?;
+        Ok(())
+    }
+
+    fn gemm(
+        &mut self,
+        blas: &MetalBlas,
+        a: &[f32],
+        b: &[f32],
+        m: usize,
+        k: usize,
+        n: usize,
+    ) -> Result<Vec<f32>> {
         let a_len = m * k;
         let b_len = k * n;
         let c_len = m * n;
+        let a_bytes = a_len * std::mem::size_of::<f32>();
+        let b_bytes = b_len * std::mem::size_of::<f32>();
+        let c_bytes = c_len * std::mem::size_of::<f32>();
 
         if a.len() != a_len {
             return Err(Error::tensor(format!(
@@ -193,40 +278,32 @@ kernel void gemv_kernel(
             )));
         }
 
-        // Allocate output buffer
-        let mut c = vec![0.0f32; c_len];
+        self.ensure_capacity(&blas.device, a_bytes, b_bytes, c_bytes)?;
+        self.a.copy_from_f32_slice(a)?;
+        self.b.copy_from_f32_slice(b)?;
 
-        // Create Metal buffers
-        let buffer_a = self.device.new_buffer_with_data(
-            a.as_ptr() as *const _,
-            (a_len * std::mem::size_of::<f32>()) as u64,
-            MTLResourceOptions::StorageModeShared,
-        );
+        if m >= 16 && n >= 16 && k >= 16 {
+            return self.gemm_tiled(blas, m, k, n, c_len);
+        }
 
-        let buffer_b = self.device.new_buffer_with_data(
-            b.as_ptr() as *const _,
-            (b_len * std::mem::size_of::<f32>()) as u64,
-            MTLResourceOptions::StorageModeShared,
-        );
+        self.gemm_naive(blas, m, k, n, c_len)
+    }
 
-        let buffer_c = self.device.new_buffer(
-            (c_len * std::mem::size_of::<f32>()) as u64,
-            MTLResourceOptions::StorageModeShared,
-        );
-
-        // Create command buffer
-        let command_buffer = self.command_queue.new_command_buffer();
-
-        // Create compute encoder
+    fn gemm_naive(
+        &mut self,
+        blas: &MetalBlas,
+        m: usize,
+        k: usize,
+        n: usize,
+        c_len: usize,
+    ) -> Result<Vec<f32>> {
+        let command_buffer = blas.command_queue.new_command_buffer();
         let compute_encoder = command_buffer.new_compute_command_encoder();
-        compute_encoder.set_compute_pipeline_state(&self.matmul_pipeline);
+        compute_encoder.set_compute_pipeline_state(&blas.matmul_pipeline);
+        compute_encoder.set_buffer(0, Some(&self.a.buffer), 0);
+        compute_encoder.set_buffer(1, Some(&self.b.buffer), 0);
+        compute_encoder.set_buffer(2, Some(&self.c.buffer), 0);
 
-        // Set buffers
-        compute_encoder.set_buffer(0, Some(&buffer_a), 0);
-        compute_encoder.set_buffer(1, Some(&buffer_b), 0);
-        compute_encoder.set_buffer(2, Some(&buffer_c), 0);
-
-        // Set parameters
         let params = [m as u32, k as u32, n as u32];
         compute_encoder.set_bytes(
             3,
@@ -244,7 +321,6 @@ kernel void gemv_kernel(
             &params[2] as *const _ as *const _,
         );
 
-        // Dispatch threads
         let threads_per_threadgroup = MTLSize {
             width: 16,
             height: 16,
@@ -259,22 +335,99 @@ kernel void gemv_kernel(
         compute_encoder.dispatch_thread_groups(threadgroups, threads_per_threadgroup);
         compute_encoder.end_encoding();
 
-        // Commit and wait
         command_buffer.commit();
         command_buffer.wait_until_completed();
 
-        // Copy result back
-        let ptr = buffer_c.contents() as *const f32;
+        let mut c = vec![0.0f32; c_len];
         unsafe {
-            std::ptr::copy_nonoverlapping(ptr, c.as_mut_ptr(), c_len);
+            std::ptr::copy_nonoverlapping(
+                self.c.buffer.contents() as *const f32,
+                c.as_mut_ptr(),
+                c_len,
+            );
         }
 
         Ok(c)
     }
 
-    /// Matrix-vector multiplication: y = A * x
-    pub fn gemv(&self, a: &[f32], x: &[f32], m: usize, n: usize) -> Result<Vec<f32>> {
+    fn gemm_tiled(
+        &mut self,
+        blas: &MetalBlas,
+        m: usize,
+        k: usize,
+        n: usize,
+        c_len: usize,
+    ) -> Result<Vec<f32>> {
+        let tile_size = 16usize;
+        let tile_bytes = tile_size * tile_size * std::mem::size_of::<f32>();
+
+        let command_buffer = blas.command_queue.new_command_buffer();
+        let compute_encoder = command_buffer.new_compute_command_encoder();
+        compute_encoder.set_compute_pipeline_state(&blas.matmul_tiled_pipeline);
+        compute_encoder.set_buffer(0, Some(&self.a.buffer), 0);
+        compute_encoder.set_buffer(1, Some(&self.b.buffer), 0);
+        compute_encoder.set_buffer(2, Some(&self.c.buffer), 0);
+        compute_encoder.set_threadgroup_memory_length(0, tile_bytes as u64);
+        compute_encoder.set_threadgroup_memory_length(1, tile_bytes as u64);
+
+        let params = [m as u32, k as u32, n as u32];
+        compute_encoder.set_bytes(
+            3,
+            std::mem::size_of_val(&params[0]) as u64,
+            &params[0] as *const _ as *const _,
+        );
+        compute_encoder.set_bytes(
+            4,
+            std::mem::size_of_val(&params[1]) as u64,
+            &params[1] as *const _ as *const _,
+        );
+        compute_encoder.set_bytes(
+            5,
+            std::mem::size_of_val(&params[2]) as u64,
+            &params[2] as *const _ as *const _,
+        );
+
+        let threads_per_threadgroup = MTLSize {
+            width: tile_size as u64,
+            height: tile_size as u64,
+            depth: 1,
+        };
+        let threadgroups = MTLSize {
+            width: ((n + tile_size - 1) / tile_size) as u64,
+            height: ((m + tile_size - 1) / tile_size) as u64,
+            depth: 1,
+        };
+
+        compute_encoder.dispatch_thread_groups(threadgroups, threads_per_threadgroup);
+        compute_encoder.end_encoding();
+
+        command_buffer.commit();
+        command_buffer.wait_until_completed();
+
+        let mut c = vec![0.0f32; c_len];
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                self.c.buffer.contents() as *const f32,
+                c.as_mut_ptr(),
+                c_len,
+            );
+        }
+
+        Ok(c)
+    }
+
+    fn gemv(
+        &mut self,
+        blas: &MetalBlas,
+        a: &[f32],
+        x: &[f32],
+        m: usize,
+        n: usize,
+    ) -> Result<Vec<f32>> {
         let a_len = m * n;
+        let a_bytes = a_len * std::mem::size_of::<f32>();
+        let x_bytes = n * std::mem::size_of::<f32>();
+        let y_bytes = m * std::mem::size_of::<f32>();
 
         if a.len() != a_len {
             return Err(Error::tensor(format!(
@@ -291,40 +444,17 @@ kernel void gemv_kernel(
             )));
         }
 
-        // Allocate output buffer
-        let mut y = vec![0.0f32; m];
+        self.ensure_capacity(&blas.device, a_bytes, x_bytes, y_bytes)?;
+        self.a.copy_from_f32_slice(a)?;
+        self.b.copy_from_f32_slice(x)?;
 
-        // Create Metal buffers
-        let buffer_a = self.device.new_buffer_with_data(
-            a.as_ptr() as *const _,
-            (a_len * std::mem::size_of::<f32>()) as u64,
-            MTLResourceOptions::StorageModeShared,
-        );
-
-        let buffer_x = self.device.new_buffer_with_data(
-            x.as_ptr() as *const _,
-            (n * std::mem::size_of::<f32>()) as u64,
-            MTLResourceOptions::StorageModeShared,
-        );
-
-        let buffer_y = self.device.new_buffer(
-            (m * std::mem::size_of::<f32>()) as u64,
-            MTLResourceOptions::StorageModeShared,
-        );
-
-        // Create command buffer
-        let command_buffer = self.command_queue.new_command_buffer();
-
-        // Create compute encoder
+        let command_buffer = blas.command_queue.new_command_buffer();
         let compute_encoder = command_buffer.new_compute_command_encoder();
-        compute_encoder.set_compute_pipeline_state(&self.gemv_pipeline);
+        compute_encoder.set_compute_pipeline_state(&blas.gemv_pipeline);
+        compute_encoder.set_buffer(0, Some(&self.a.buffer), 0);
+        compute_encoder.set_buffer(1, Some(&self.b.buffer), 0);
+        compute_encoder.set_buffer(2, Some(&self.c.buffer), 0);
 
-        // Set buffers
-        compute_encoder.set_buffer(0, Some(&buffer_a), 0);
-        compute_encoder.set_buffer(1, Some(&buffer_x), 0);
-        compute_encoder.set_buffer(2, Some(&buffer_y), 0);
-
-        // Set parameters
         let params = [m as u32, n as u32];
         compute_encoder.set_bytes(
             3,
@@ -337,7 +467,6 @@ kernel void gemv_kernel(
             &params[1] as *const _ as *const _,
         );
 
-        // Dispatch threads
         let threads_per_threadgroup = MTLSize {
             width: 256,
             height: 1,
@@ -352,17 +481,53 @@ kernel void gemv_kernel(
         compute_encoder.dispatch_thread_groups(threadgroups, threads_per_threadgroup);
         compute_encoder.end_encoding();
 
-        // Commit and wait
         command_buffer.commit();
         command_buffer.wait_until_completed();
 
-        // Copy result back
-        let ptr = buffer_y.contents() as *const f32;
+        let mut y = vec![0.0f32; m];
         unsafe {
-            std::ptr::copy_nonoverlapping(ptr, y.as_mut_ptr(), m);
+            std::ptr::copy_nonoverlapping(self.c.buffer.contents() as *const f32, y.as_mut_ptr(), m);
         }
 
         Ok(y)
+    }
+}
+
+#[cfg(feature = "metal")]
+#[derive(Debug)]
+struct MetalScratchBuffer {
+    buffer: Buffer,
+    size: usize,
+}
+
+#[cfg(feature = "metal")]
+impl MetalScratchBuffer {
+    fn new(device: &Device, size: usize) -> Result<Self> {
+        let size = size.max(1);
+        let buffer = device.new_buffer(size as u64, MTLResourceOptions::StorageModeShared);
+        Ok(Self { buffer, size })
+    }
+
+    fn ensure_capacity(&mut self, device: &Device, size: usize) -> Result<()> {
+        if size <= self.size {
+            return Ok(());
+        }
+
+        *self = Self::new(device, size)?;
+        Ok(())
+    }
+
+    fn copy_from_f32_slice(&self, data: &[f32]) -> Result<()> {
+        let bytes = data.len() * std::mem::size_of::<f32>();
+        unsafe {
+            std::ptr::copy_nonoverlapping(data.as_ptr(), self.buffer.contents() as *mut f32, data.len());
+        }
+
+        self.buffer.did_modify_range(NSRange {
+            location: 0,
+            length: bytes as u64,
+        });
+        Ok(())
     }
 }
 
